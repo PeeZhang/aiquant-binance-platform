@@ -20,6 +20,13 @@ console/state/
 console/console.pid
 console/*.log
 
+# Local AI assistant instructions/state
+CLAUDE.md
+CODEX.md
+AGENTS.md
+.claude/
+.codex/
+
 # Large/generated report artifacts
 reports/generated/
 reports/*.html
