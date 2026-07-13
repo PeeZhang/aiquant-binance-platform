@@ -11,14 +11,25 @@ Binance Spot quant research platform using Freqtrade as the core engine.
 
 ## Quick Start
 
-Run from this directory:
+Prerequisites:
+
+- Git
+- Docker Desktop
+- PowerShell
+
+Clone and enter the project:
+
+```powershell
+git clone https://github.com/PeeZhang/aiquant-binance-platform.git
+cd aiquant-binance-platform
+```
+
+Start the local Freqtrade engine and Chinese console:
 
 ```powershell
 .\scripts\safe_freqtrade.ps1 validate
 docker compose -f .\freqtrade\docker-compose.yml config
-.\scripts\safe_freqtrade.ps1 download-data
-.\scripts\safe_freqtrade.ps1 backtest -Strategy SmaCrossSpot
-.\scripts\safe_freqtrade.ps1 start
+.\scripts\console.ps1 start
 ```
 
 The default config is `freqtrade/configs/binance_spot_dryrun.json`.
@@ -34,6 +45,14 @@ The Chinese aiquant console is exposed separately on:
 http://127.0.0.1:8090
 ```
 
+The first user workflow is:
+
+1. Open the Chinese console.
+2. Go to `数据` and download Binance Spot history data.
+3. Go to `回测` and run the default strategy.
+4. Run parameter optimization if desired.
+5. Save an optimized version, then test it in `模拟交易`.
+
 Useful runtime commands:
 
 ```powershell
@@ -46,6 +65,13 @@ Useful runtime commands:
 .\scripts\console.ps1 stop
 ```
 
+Optional CLI backtest after downloading data:
+
+```powershell
+.\scripts\safe_freqtrade.ps1 download-data -Timeframes 1m -Pairs BTC/USDT
+.\scripts\safe_freqtrade.ps1 backtest -Strategy FastFlipTestSpot -Timeframes 1m -Pairs BTC/USDT
+```
+
 ## Safety Defaults
 
 - `dry_run=true`
@@ -56,16 +82,19 @@ Useful runtime commands:
 - strategy classes set `can_short=False`
 - first pairs: `BTC/USDT`, `ETH/USDT`, `BNB/USDT`, `SOL/USDT`
 
-## First Strategies
+## Shared Strategy
 
-- `SmaCrossSpot`: trend-following baseline.
-- `RsiMeanReversionSpot`: mean-reversion baseline with a trend filter.
+The public repository intentionally includes only one runnable default strategy:
 
-These are intentionally simple. Their job is to verify the complete loop:
+- `FastFlipTestSpot`: an aggressive Binance Spot dry-run test strategy.
+
+It is intentionally simple. Its job is to verify the complete loop:
 config validation -> data download -> backtest -> dry-run -> report export.
+It should not be treated as a real trading strategy.
 
 ## First Verified Run
 
-On 2026-07-10, the first verified run downloaded BTC/USDT and ETH/USDT `5m`
-and `1h` data from 2025-01-01 onward, then backtested both baseline strategies.
-Human-readable summaries are under `reports/generated/`.
+Local data, backtest results, hyperopt results, generated reports, private
+strategies, and console state are intentionally ignored by Git. A fresh clone
+starts empty and should use the console or `scripts/safe_freqtrade.ps1` to
+download its own market data.

@@ -5,10 +5,15 @@ This directory contains first-party Freqtrade strategies.
 The Docker Compose runtime mounts this directory into
 `/freqtrade/user_data/strategies`, so Freqtrade can load these classes directly.
 
-## Baselines
+## Shared Baseline
 
-- `SmaCrossSpot`: trend-following baseline.
-- `RsiMeanReversionSpot`: mean-reversion baseline with a long-term trend filter.
+- `FastFlipTestSpot`: aggressive dry-run test strategy for validating the full
+  platform loop.
 
-Both strategies are Binance Spot only. They set `can_short = False`, define a
-stoploss, and use conservative stake sizing.
+The public repository intentionally includes only this default strategy. Private
+research strategies and generated optimization exports are ignored by Git by
+default.
+
+Shared strategies should be Binance Spot only. They must set
+`can_short = False`, define a stoploss, and avoid futures, leverage, or short
+selling.

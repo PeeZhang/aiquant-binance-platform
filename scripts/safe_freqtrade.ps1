@@ -3,7 +3,7 @@ param(
     [ValidateSet("validate", "download-data", "backtest", "trade", "start", "stop", "status", "logs", "show-config")]
     [string]$Command = "validate",
 
-    [string]$Strategy = "SmaCrossSpot",
+    [string]$Strategy = "FastFlipTestSpot",
     [string]$Config = "freqtrade/configs/binance_spot_dryrun.json",
     [string]$Timerange = "20240101-",
     [string[]]$Timeframes = @("5m", "1h"),
