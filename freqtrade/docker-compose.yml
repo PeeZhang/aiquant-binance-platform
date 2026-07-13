@@ -1,0 +1,43 @@
+services:
+  freqtrade:
+    image: freqtradeorg/freqtrade:stable
+    container_name: aiquant-freqtrade
+    restart: "no"
+    command:
+      - trade
+      - --config
+      - /freqtrade/configs/binance_spot_dryrun.json
+      - --logfile
+      - /freqtrade/user_data/logs/freqtrade.log
+    volumes:
+      - ./configs:/freqtrade/configs:ro
+      - ./user_data:/freqtrade/user_data
+      - ../strategies:/freqtrade/user_data/strategies
+      - ../reports:/freqtrade/reports
+      - ../scripts:/freqtrade/scripts:ro
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      TZ: Asia/Shanghai
+
+  console:
+    image: freqtradeorg/freqtrade:stable
+    container_name: aiquant-console
+    restart: "no"
+    entrypoint:
+      - python
+    command:
+      - /workspace/console/server.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+    volumes:
+      - ..:/workspace
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      TZ: Asia/Shanghai
+      FREQTRADE_API_URL: http://freqtrade:8080
+    depends_on:
+      - freqtrade

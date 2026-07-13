@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>aiquant 控制台</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">AQ</div>
+          <div>
+            <h1>aiquant</h1>
+            <p>Binance Spot 工作台</p>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="主导航">
+          <button class="nav-item active" type="button" data-view="dashboard">
+            <span class="nav-icon">01</span><span>总览</span>
+          </button>
+          <button class="nav-item" type="button" data-view="data">
+            <span class="nav-icon">02</span><span>数据</span>
+          </button>
+          <button class="nav-item" type="button" data-view="strategies">
+            <span class="nav-icon">03</span><span>策略</span>
+          </button>
+          <button class="nav-item" type="button" data-view="backtest">
+            <span class="nav-icon">04</span><span>回测</span>
+          </button>
+          <button class="nav-item" type="button" data-view="simulation">
+            <span class="nav-icon">05</span><span>模拟交易</span>
+          </button>
+          <button class="nav-item danger-zone" type="button" data-view="live">
+            <span class="nav-icon">06</span><span>实盘交易</span>
+          </button>
+          <button class="nav-item" type="button" data-view="account">
+            <span class="nav-icon">07</span><span>账户与风控</span>
+          </button>
+          <button class="nav-item" type="button" data-view="reports">
+            <span class="nav-icon">08</span><span>报告</span>
+          </button>
+        </nav>
+
+        <div class="connection">
+          <span id="apiState" class="dot"></span>
+          <div>
+            <strong id="apiText">连接中</strong>
+            <small id="updatedAt">等待数据</small>
+          </div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="viewEyebrow">交易工作流</p>
+            <h2 id="viewTitle">总览</h2>
+            <p id="viewSubtitle" class="subtitle">先看关键状态，再进入数据、策略、回测、模拟和实盘环节。</p>
+          </div>
+          <div class="actions" aria-label="运行控制">
+            <button id="refreshBtn" class="button secondary" type="button" title="刷新所有数据">刷新</button>
+            <button id="globalStopBtn" class="button danger global-stop" type="button" title="平仓所有持仓并停止机器人">全局停止</button>
+          </div>
+        </header>
+
+        <section class="status-strip" aria-label="运行状态">
+          <div class="status-chip" id="stateChip">状态: --</div>
+          <div class="status-chip safe">dry-run</div>
+          <div class="status-chip safe">spot</div>
+          <div class="status-chip safe">sandbox</div>
+          <div class="status-chip" id="strategyChip">策略: --</div>
+        </section>
+
+        <section class="view active" id="view-dashboard" data-title="总览">
+          <div class="flowline" aria-label="量化交易流程">
+            <div><strong>数据</strong><span>行情准备</span></div>
+            <div><strong>策略</strong><span>规则沉淀</span></div>
+            <div><strong>回测</strong><span>历史验证</span></div>
+            <div><strong>模拟</strong><span>实时演练</span></div>
+            <div><strong>实盘</strong><span>安全执行</span></div>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric">
+              <span>账户余额</span>
+              <strong id="balanceTotal">--</strong>
+              <small id="balanceFree">可用 --</small>
+            </article>
+            <article class="metric">
+              <span>总收益</span>
+              <strong id="profitTotal">--</strong>
+              <small id="profitAbs">--</small>
+            </article>
+            <article class="metric">
+              <span>打开交易</span>
+              <strong id="openTrades">--</strong>
+              <small id="tradeCount">累计 --</small>
+            </article>
+            <article class="metric">
+              <span>当前策略</span>
+              <strong id="strategyName">--</strong>
+              <small id="timeframe">--</small>
+            </article>
+          </div>
+
+          <div class="layout-two">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>运行概况</h3>
+                <span class="badge neutral" id="versionBadge">--</span>
+              </div>
+              <dl class="kv">
+                <div><dt>机器人</dt><dd id="botName">--</dd></div>
+                <div><dt>交易所</dt><dd id="exchangeName">Binance</dd></div>
+                <div><dt>交易对</dt><dd id="pairs">--</dd></div>
+                <div><dt>单笔金额</dt><dd id="stake">--</dd></div>
+              </dl>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>安全摘要</h3>
+                <span id="safetyBadgeMini" class="badge">检查中</span>
+              </div>
+              <div id="dashboardSafetyList" class="compact-checks"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-data">
+          <div class="data-layout">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>本地回测数据</h3>
+                <span id="dataCountBadge" class="badge neutral">--</span>
+              </div>
+              <p class="hint">管理用于回测的 Binance Spot OHLCV 文件。可直接下载/更新，也可对单条数据做缺口修复、重命名和删除。</p>
+              <form id="dataDownloadForm" class="data-download-form">
+                <label class="wide">交易对
+                  <textarea id="dataDownloadPairs" rows="2" placeholder="BTC/USDT, ETH/USDT"></textarea>
+                </label>
+                <fieldset>
+                  <legend>K线周期</legend>
+                  <label><input type="checkbox" name="dataTimeframe" value="5m" checked>5m</label>
+                  <label><input type="checkbox" name="dataTimeframe" value="1h" checked>1h</label>
+                  <label><input type="checkbox" name="dataTimeframe" value="1d">1d</label>
+                </fieldset>
+                <label>起始时间<input id="dataDownloadStart" type="date"></label>
+                <label>结束时间<input id="dataDownloadEnd" type="date"></label>
+                <div class="data-actions">
+                  <button id="fillWatchlistPairsBtn" class="button secondary" type="button">填入自选</button>
+                  <button id="downloadDataBtn" class="button success" type="submit">下载/更新</button>
+                </div>
+              </form>
+              <pre id="dataActionLog" class="mini-log hidden">等待数据任务</pre>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>数据名称</th>
+                      <th>交易所</th>
+                      <th>交易对</th>
+                      <th>周期</th>
+                      <th>起始时间</th>
+                      <th>结束时间</th>
+                      <th>K线数</th>
+                      <th>完整度</th>
+                      <th>缺口</th>
+                      <th>状态</th>
+                      <th>大小</th>
+                      <th>更新时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dataRows"></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>自选实时行情</h3>
+                <span id="watchlistBadge" class="badge neutral">--</span>
+              </div>
+              <form id="watchlistForm" class="inline-form">
+                <input id="watchPairInput" type="text" placeholder="例如 BTC/USDT 或 BTCUSDT" autocomplete="off">
+                <button class="button success" type="submit">添加自选</button>
+              </form>
+              <div id="watchlistPills" class="pill-list"></div>
+
+              <div class="market-toolbar">
+                <div>
+                  <span>当前标的</span>
+                  <strong id="selectedPair">--</strong>
+                </div>
+                <div class="chart-controls">
+                  <label>
+                    <span>窗口</span>
+                    <select id="marketWindow" class="compact-select">
+                      <option value="2h">2小时</option>
+                      <option value="6h">6小时</option>
+                      <option value="12h">12小时</option>
+                      <option value="1d" selected>1天</option>
+                      <option value="3d">3天</option>
+                      <option value="7d">7天</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>周期</span>
+                    <select id="marketInterval" class="compact-select">
+                      <option value="1m">1m</option>
+                      <option value="5m">5m</option>
+                      <option value="15m">15m</option>
+                      <option value="1h" selected>1h</option>
+                      <option value="4h">4h</option>
+                      <option value="1d">1d</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="ticker-grid">
+                <div><span>最新价</span><strong id="tickerLast">--</strong></div>
+                <div><span>24h 涨跌</span><strong id="tickerChange">--</strong></div>
+                <div><span>24h 高点</span><strong id="tickerHigh">--</strong></div>
+                <div><span>24h 低点</span><strong id="tickerLow">--</strong></div>
+              </div>
+
+              <div class="chart-shell">
+                <canvas id="klineCanvas" width="860" height="360" aria-label="K线图"></canvas>
+                <div id="chartEmpty" class="chart-empty">选择一个自选交易对后加载 K 线</div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-strategies">
+          <article class="panel">
+            <div class="panel-head">
+              <h3>新建策略向导</h3>
+              <button id="toggleStrategyBuilderBtn" class="button secondary" type="button">新建策略</button>
+            </div>
+            <div id="strategyBuilder" class="builder hidden">
+              <div class="form-grid builder-grid">
+                <label>策略类名<input id="builderClassName" value="MyFirstSpotStrategy"></label>
+                <label>模板
+                  <select id="builderTemplate">
+                    <option value="sma_cross">均线交叉趋势</option>
+                    <option value="rsi_mean">RSI 均值回归</option>
+                  </select>
+                </label>
+                <label>K线周期
+                  <select id="builderTimeframe">
+                    <option value="1m">1m</option>
+                    <option value="5m">5m</option>
+                    <option value="15m">15m</option>
+                    <option value="1h" selected>1h</option>
+                    <option value="4h">4h</option>
+                    <option value="1d">1d</option>
+                  </select>
+                </label>
+                <label>最小下单 USDT<input id="builderMinStake" type="number" value="20" min="5" step="1"></label>
+                <label>止损比例<input id="builderStoploss" type="number" value="0.08" min="0.005" max="0.5" step="0.005"></label>
+                <label>立即止盈<input id="builderRoi0" type="number" value="0.04" min="0" max="1" step="0.005"></label>
+                <label>240分钟 ROI<input id="builderRoi1" type="number" value="0.02" min="0" max="1" step="0.005"></label>
+                <label>720分钟 ROI<input id="builderRoi2" type="number" value="0" min="0" max="1" step="0.005"></label>
+                <label>快均线周期<input id="builderFast" type="number" value="50" min="2" step="1"></label>
+                <label>慢均线周期<input id="builderSlow" type="number" value="200" min="3" step="1"></label>
+                <label>RSI 买入阈值<input id="builderRsiBuy" type="number" value="30" min="1" max="99" step="1"></label>
+                <label>RSI 卖出阈值<input id="builderRsiSell" type="number" value="60" min="1" max="99" step="1"></label>
+              </div>
+              <div class="builder-actions">
+                <button id="previewStrategyBtn" class="button secondary" type="button">生成预览</button>
+                <button id="saveStrategyBtn" class="button success" type="button">保存为策略文件</button>
+              </div>
+              <pre id="strategyCodePreview" class="code-preview">点击“生成预览”后显示 Python 策略代码</pre>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <h3>策略编写接口</h3>
+              <span class="badge neutral">Freqtrade</span>
+            </div>
+            <div class="steps strategy-steps">
+              <div><strong>1. 指标</strong><span>在 `populate_indicators` 里计算均线、RSI、成交量等。</span></div>
+              <div><strong>2. 买入</strong><span>在 `populate_entry_trend` 里标记 `enter_long = 1`。</span></div>
+              <div><strong>3. 卖出</strong><span>在 `populate_exit_trend` 里标记 `exit_long = 1`。</span></div>
+              <div><strong>4. 风险</strong><span>配置 `stoploss`、`minimal_roi`、仓位和 protections。</span></div>
+            </div>
+          </article>
+
+          <div class="strategy-layout">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>策略库</h3>
+                <span id="strategyCountBadge" class="badge neutral">--</span>
+              </div>
+              <div id="strategyList" class="card-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>策略详情</h3>
+                <span id="strategyDetailBadge" class="badge neutral">请选择</span>
+              </div>
+              <div id="strategyDetail" class="strategy-detail">
+                <div class="empty-card">点击左侧策略卡片查看详情</div>
+              </div>
+              <div class="detail-actions">
+                <button id="applyStrategyBtn" class="button success" type="button" disabled>应用到控制台</button>
+                <button id="disableStrategyBtn" class="button warn" type="button" disabled>禁用</button>
+              </div>
+            </article>
+          </div>
+
+          <article class="panel strategy-version-panel">
+            <div class="panel-head">
+              <div>
+                <h3>策略版本库</h3>
+                <p class="panel-note">保存参数优化结果，回测和模拟交易时可选择某个版本运行；不会改写 Python 策略文件。</p>
+              </div>
+              <span id="strategyVersionCountBadge" class="badge neutral">--</span>
+            </div>
+            <div id="strategyVersionList" class="version-list"></div>
+          </article>
+        </section>
+
+        <section class="view" id="view-backtest">
+          <div class="layout-two">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>回测工作台</h3>
+                <span class="badge safe">Freqtrade</span>
+              </div>
+              <div class="form-grid">
+                <label>策略<select id="backtestStrategySelect"></select></label>
+                <label>策略版本<select id="backtestVersionSelect"></select></label>
+                <label>单一交易对数据集<select id="backtestDatasetSelect"></select></label>
+                <label>本次回测交易对<input id="backtestPair" value="--" readonly></label>
+                <label>周期<input id="backtestTimeframe" value="--" readonly></label>
+                <label>起始时间<input id="backtestStart" type="date"></label>
+                <label>结束时间<input id="backtestEnd" type="date"></label>
+              </div>
+              <div class="builder-actions">
+                <button id="runBacktestBtn" class="button success" type="button">运行回测</button>
+              </div>
+              <p class="hint">回测只对所选数据集对应的单一交易对运行；策略文件只负责买卖条件，不负责决定交易哪个币。</p>
+              <pre id="backtestStatus" class="mini-log">等待运行回测</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>参数优化工作台</h3>
+                  <p class="panel-note">先优化 ROI、止损、移动止盈等安全参数；不会自动写回策略文件。</p>
+                </div>
+                <span class="badge safe">Hyperopt</span>
+              </div>
+              <div class="form-grid">
+                <label>策略<select id="hyperoptStrategySelect"></select></label>
+                <label>单一交易对数据集<select id="hyperoptDatasetSelect"></select></label>
+                <label>本次优化交易对<input id="hyperoptPair" value="--" readonly></label>
+                <label>周期<input id="hyperoptTimeframe" value="--" readonly></label>
+                <label>起始时间<input id="hyperoptStart" type="date"></label>
+                <label>结束时间<input id="hyperoptEnd" type="date"></label>
+                <label>优化轮数<input id="hyperoptEpochs" type="number" min="1" max="500" step="1" value="25"></label>
+                <label>最少交易数<input id="hyperoptMinTrades" type="number" min="1" step="1" value="1"></label>
+                <label class="span-two">优化目标
+                  <select id="hyperoptLoss">
+                    <option value="SharpeHyperOptLossDaily">Sharpe 日频</option>
+                    <option value="ProfitDrawDownHyperOptLoss">收益/回撤平衡</option>
+                    <option value="OnlyProfitHyperOptLoss">只看收益</option>
+                    <option value="SortinoHyperOptLossDaily">Sortino 日频</option>
+                    <option value="MaxDrawDownRelativeHyperOptLoss">控制相对回撤</option>
+                  </select>
+                </label>
+              </div>
+              <div class="compact-checks hyperopt-spaces">
+                <label class="check"><span>ROI</span><input name="hyperoptSpace" type="checkbox" value="roi" checked></label>
+                <label class="check"><span>止损</span><input name="hyperoptSpace" type="checkbox" value="stoploss" checked></label>
+                <label class="check"><span>移动止盈</span><input name="hyperoptSpace" type="checkbox" value="trailing"></label>
+                <label class="check"><span>保护规则</span><input name="hyperoptSpace" type="checkbox" value="protection"></label>
+              </div>
+              <div class="builder-actions">
+                <button id="runHyperoptBtn" class="button success" type="button">运行参数优化</button>
+              </div>
+              <p class="hint">买入/卖出条件优化需要策略文件先声明可优化参数；当前 MVP 先优化 Freqtrade 原生风险参数。</p>
+              <pre id="hyperoptStatus" class="mini-log">等待运行参数优化</pre>
+            </article>
+          </div>
+
+          <div class="layout-two backtest-history-layout">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>历史回测记录</h3>
+                <span class="badge neutral">自动保存</span>
+              </div>
+              <div id="backtestList" class="report-list compact"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>历史优化记录</h3>
+                <span id="hyperoptCountBadge" class="badge neutral">--</span>
+              </div>
+              <div id="hyperoptList" class="report-list compact"></div>
+            </article>
+          </div>
+
+          <article class="panel backtest-detail-panel">
+            <div class="panel-head">
+              <div>
+                <h3>回测结果详情</h3>
+                <p class="panel-note">点击历史回测记录的“详情”，查看曲线、归因和交易明细。</p>
+              </div>
+              <span id="backtestDetailBadge" class="badge neutral">未选择</span>
+            </div>
+            <div id="backtestDetail" class="backtest-detail-empty">请选择一条历史回测记录</div>
+          </article>
+        </section>
+
+        <section class="view" id="view-simulation">
+          <article class="panel simulation-control">
+            <div class="panel-head">
+              <h3>模拟交易会话</h3>
+              <span id="simulationRunBadge" class="badge warn">未运行</span>
+            </div>
+            <div class="simulation-command">
+              <label>策略<select id="simulationStrategySelect"></select></label>
+              <label>策略版本<select id="simulationVersionSelect"></select></label>
+              <label>本次模拟交易对<select id="simulationPairSelect"></select></label>
+              <button id="startSimulationBtn" class="button success" type="button">开始模拟交易</button>
+              <button id="stopSimulationBtn" class="button danger" type="button" disabled>关闭模拟交易</button>
+            </div>
+            <div class="simulation-capital" aria-label="模拟资金设置">
+              <div class="capital-head">
+                <strong>资金设置</strong>
+                <span>仅对本次 dry-run 会话生效</span>
+              </div>
+              <label>
+                <span>模拟钱包</span>
+                <input id="simulationWalletInput" type="number" min="1" step="100" inputmode="decimal" />
+              </label>
+              <label>
+                <span>单笔投入</span>
+                <input id="simulationStakeInput" type="number" min="1" step="10" inputmode="decimal" />
+              </label>
+              <label>
+                <span>最大同时持仓</span>
+                <input id="simulationMaxOpenInput" type="number" min="1" step="1" inputmode="numeric" />
+              </label>
+              <label>
+                <span>可交易资金比例</span>
+                <input id="simulationBalanceRatioInput" type="number" min="0.01" max="1" step="0.01" inputmode="decimal" />
+              </label>
+              <output id="simulationExposurePreview" class="capital-preview">等待资金参数</output>
+            </div>
+            <p id="simulationWarning" class="warning-line hidden"></p>
+          </article>
+
+          <div class="simulation-metrics">
+            <article class="metric sim-tape">
+              <span>交易对</span>
+              <strong id="simPairMetric">--</strong>
+              <small id="simStrategyMetric">--</small>
+            </article>
+            <article class="metric">
+              <span>交易次数</span>
+              <strong id="simTradesMetric">0</strong>
+              <small id="simRuntimeMetric">--</small>
+            </article>
+            <article class="metric">
+              <span>会话收益</span>
+              <strong id="simProfitMetric">--</strong>
+              <small id="simProfitRatioMetric">--</small>
+            </article>
+            <article class="metric">
+              <span>运行时长</span>
+              <strong id="simDurationMetric">--</strong>
+              <small id="simStartedAt">--</small>
+            </article>
+          </div>
+
+          <div class="simulation-grid">
+            <article class="panel simulation-chart-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>实时K线与执行点</h3>
+                  <p class="panel-note"><span id="simulationChartPair">--</span> · B/S 标记来自模拟交易记录</p>
+                </div>
+                <div class="chart-controls">
+                  <div class="simulation-price-tile" aria-label="模拟交易实时价格">
+                    <span>实时价格</span>
+                    <strong id="simulationTickerLast">--</strong>
+                    <small id="simulationTickerChange">--</small>
+                  </div>
+                  <label>
+                    <span>窗口</span>
+                    <select id="simulationWindow" class="compact-select">
+                      <option value="2h">2小时</option>
+                      <option value="6h">6小时</option>
+                      <option value="12h">12小时</option>
+                      <option value="1d" selected>1天</option>
+                      <option value="3d">3天</option>
+                      <option value="7d">7天</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>周期</span>
+                    <select id="simulationInterval" class="compact-select">
+                      <option value="1m">1m</option>
+                      <option value="5m">5m</option>
+                      <option value="15m">15m</option>
+                      <option value="1h" selected>1h</option>
+                      <option value="4h">4h</option>
+                      <option value="1d">1d</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="chart-shell simulation-chart">
+                <canvas id="simulationKlineCanvas" height="360"></canvas>
+                <div id="simulationChartEmpty" class="chart-empty hidden">等待交易对行情</div>
+              </div>
+            </article>
+
+            <article class="panel simulation-positions-panel">
+              <div class="panel-head">
+                <h3>运行中持仓</h3>
+                <span class="badge neutral" id="openTradeBadge">--</span>
+              </div>
+              <div class="runtime-note">
+                <div><span>运行模式</span><strong id="simModeLine">--</strong></div>
+                <div><span>Freqtrade策略</span><strong id="simRuntimeStrategy">--</strong></div>
+                <div><span>策略版本</span><strong id="simRuntimeVersion">默认参数</strong></div>
+                <div><span>运行白名单</span><strong id="simRuntimePairs">--</strong></div>
+                <div><span>资金边界</span><strong id="simCapitalLine">--</strong></div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>交易对</th>
+                      <th>方向</th>
+                      <th>开仓价</th>
+                      <th>持仓金额</th>
+                      <th>收益</th>
+                      <th>时长</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tradeRows"></tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+
+          <div class="layout-two simulation-diagnostics">
+            <article class="panel simulation-orders-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>订单列表</h3>
+                  <p class="panel-note">查看当前交易对的委托、成交和撤单状态。</p>
+                </div>
+                <span id="simulationOrderBadge" class="badge neutral">--</span>
+              </div>
+              <div class="table-wrap simulation-order-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>方向</th>
+                      <th>状态</th>
+                      <th>价格</th>
+                      <th>数量</th>
+                      <th>金额</th>
+                    </tr>
+                  </thead>
+                  <tbody id="simulationOrderRows"></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel simulation-log-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>运行日志</h3>
+                  <p class="panel-note">用于排查策略为什么没有买入或卖出。</p>
+                </div>
+                <div class="log-filter">
+                  <select id="simulationLogFilter" class="compact-select" aria-label="模拟交易日志筛选">
+                    <option value="trade">交易相关</option>
+                    <option value="strategy">策略相关</option>
+                    <option value="warn">警告错误</option>
+                    <option value="all">全部日志</option>
+                  </select>
+                  <span id="simulationLogBadge" class="badge neutral">--</span>
+                </div>
+              </div>
+              <div id="simulationReasonHint" class="simulation-reason-hint">等待模拟交易运行状态</div>
+              <pre id="simulationLogText" class="simulation-log">暂无日志</pre>
+            </article>
+          </div>
+
+          <div class="layout-two">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>模拟交易历史</h3>
+                <span class="badge neutral">自动保存</span>
+              </div>
+              <div id="simulationHistoryList" class="report-list compact"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>交易对表现</h3>
+                <span class="badge neutral">Freqtrade</span>
+              </div>
+              <div id="performanceList" class="perf-list"></div>
+            </article>
+          </div>
+
+          <article class="panel simulation-detail-panel">
+            <div class="panel-head">
+              <h3>模拟交易详情</h3>
+              <span id="simulationDetailBadge" class="badge neutral">未选择</span>
+            </div>
+            <div id="simulationDetail" class="backtest-detail-empty">请选择一条模拟交易历史记录</div>
+          </article>
+        </section>
+
+        <section class="view" id="view-live">
+          <div class="live-lock">
+            <div>
+              <p class="eyebrow">实盘交易</p>
+              <h3>当前被安全锁定</h3>
+              <p>本项目现阶段只允许 Binance Spot dry-run/testnet。实盘交易需要单独配置 profile、API 权限、资金上限、二次确认和审计日志。</p>
+            </div>
+            <span id="liveLockBadge" class="badge danger">禁止实盘</span>
+          </div>
+
+          <article class="panel simulation-control live-control">
+            <div class="panel-head">
+              <h3>实盘交易会话</h3>
+              <span id="liveRunBadge" class="badge danger">安全锁定</span>
+            </div>
+            <div class="simulation-command">
+              <label>策略<select id="liveStrategySelect" disabled></select></label>
+              <label>策略版本<select id="liveVersionSelect" disabled></select></label>
+              <label>本次实盘交易对<select id="livePairSelect" disabled></select></label>
+              <button id="startLiveBtn" class="button success" type="button" disabled>启动实盘交易</button>
+              <button id="stopLiveBtn" class="button danger" type="button" disabled>平仓并停止</button>
+            </div>
+            <div class="simulation-capital live-capital" aria-label="实盘资金设置">
+              <div class="capital-head">
+                <strong>实盘资金边界</strong>
+                <span>未来接入 live profile 后启用</span>
+              </div>
+              <label>
+                <span>账户资金</span>
+                <input id="liveWalletInput" value="需要实盘 profile" readonly />
+              </label>
+              <label>
+                <span>单笔投入</span>
+                <input id="liveStakeInput" value="需要二次确认" readonly />
+              </label>
+              <label>
+                <span>最大同时持仓</span>
+                <input id="liveMaxOpenInput" value="由风控页设置" readonly />
+              </label>
+              <label>
+                <span>可交易资金比例</span>
+                <input id="liveBalanceRatioInput" value="由风控页设置" readonly />
+              </label>
+              <output id="liveExposurePreview" class="capital-preview danger">实盘默认锁定，禁止从当前 profile 直接启动。</output>
+            </div>
+            <p id="liveWarning" class="warning-line">当前项目仍处于 dry-run / sandbox 阶段。实盘按钮仅作为页面结构预留。</p>
+          </article>
+
+          <div class="simulation-metrics">
+            <article class="metric sim-tape live-tape">
+              <span>交易对</span>
+              <strong id="livePairMetric">--</strong>
+              <small id="liveStrategyMetric">--</small>
+            </article>
+            <article class="metric">
+              <span>交易次数</span>
+              <strong id="liveTradesMetric">0</strong>
+              <small id="liveRuntimeMetric">--</small>
+            </article>
+            <article class="metric">
+              <span>账户收益</span>
+              <strong id="liveProfitMetric">--</strong>
+              <small id="liveProfitRatioMetric">--</small>
+            </article>
+            <article class="metric">
+              <span>运行时长</span>
+              <strong id="liveDurationMetric">--</strong>
+              <small id="liveStartedAt">未启用</small>
+            </article>
+          </div>
+
+          <div class="simulation-grid">
+            <article class="panel simulation-chart-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>实盘K线与执行点</h3>
+                  <p class="panel-note"><span id="liveChartPair">--</span> · 未来显示真实订单 B/S 点</p>
+                </div>
+                <div class="chart-controls">
+                  <div class="simulation-price-tile live-price-tile" aria-label="实盘实时价格">
+                    <span>实时价格</span>
+                    <strong id="liveTickerLast">--</strong>
+                    <small id="liveTickerChange">--</small>
+                  </div>
+                  <label>
+                    <span>窗口</span>
+                    <select id="liveWindow" class="compact-select">
+                      <option value="2h">2小时</option>
+                      <option value="6h">6小时</option>
+                      <option value="12h">12小时</option>
+                      <option value="1d" selected>1天</option>
+                      <option value="3d">3天</option>
+                      <option value="7d">7天</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>周期</span>
+                    <select id="liveInterval" class="compact-select">
+                      <option value="1m">1m</option>
+                      <option value="5m">5m</option>
+                      <option value="15m">15m</option>
+                      <option value="1h" selected>1h</option>
+                      <option value="4h">4h</option>
+                      <option value="1d">1d</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="chart-shell simulation-chart">
+                <canvas id="liveKlineCanvas" height="360"></canvas>
+                <div id="liveChartEmpty" class="chart-empty hidden">等待实盘交易对行情</div>
+              </div>
+            </article>
+
+            <article class="panel simulation-positions-panel">
+              <div class="panel-head">
+                <h3>实盘持仓</h3>
+                <span class="badge neutral" id="liveOpenTradeBadge">0 笔</span>
+              </div>
+              <div class="runtime-note">
+                <div><span>运行模式</span><strong id="liveModeLine">--</strong></div>
+                <div><span>Freqtrade策略</span><strong id="liveRuntimeStrategy">--</strong></div>
+                <div><span>策略版本</span><strong id="liveRuntimeVersion">默认参数</strong></div>
+                <div><span>运行白名单</span><strong id="liveRuntimePairs">--</strong></div>
+                <div><span>资金边界</span><strong id="liveCapitalLine">实盘未启用</strong></div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>交易对</th>
+                      <th>方向</th>
+                      <th>开仓价</th>
+                      <th>持仓金额</th>
+                      <th>收益</th>
+                      <th>时长</th>
+                    </tr>
+                  </thead>
+                  <tbody id="liveTradeRows"></tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+
+          <div class="layout-two simulation-diagnostics">
+            <article class="panel simulation-orders-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>实盘订单列表</h3>
+                  <p class="panel-note">未来显示真实委托、成交、撤单和拒单状态。</p>
+                </div>
+                <span id="liveOrderBadge" class="badge neutral">0 条</span>
+              </div>
+              <div class="table-wrap simulation-order-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>方向</th>
+                      <th>状态</th>
+                      <th>价格</th>
+                      <th>数量</th>
+                      <th>金额</th>
+                    </tr>
+                  </thead>
+                  <tbody id="liveOrderRows"></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel simulation-log-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>实盘运行日志</h3>
+                  <p class="panel-note">未来用于排查真实下单失败、余额不足、API 异常。</p>
+                </div>
+                <div class="log-filter">
+                  <select id="liveLogFilter" class="compact-select" aria-label="实盘日志筛选">
+                    <option value="trade">交易相关</option>
+                    <option value="strategy">策略相关</option>
+                    <option value="warn">警告错误</option>
+                    <option value="all">全部日志</option>
+                  </select>
+                  <span id="liveLogBadge" class="badge neutral">--</span>
+                </div>
+              </div>
+              <div id="liveReasonHint" class="simulation-reason-hint live-reason-hint">实盘未启用；当前只展示页面结构。</div>
+              <pre id="liveLogText" class="simulation-log">暂无实盘日志</pre>
+            </article>
+          </div>
+
+          <div class="layout-two">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>实盘交易历史</h3>
+                <span class="badge neutral">未来归档</span>
+              </div>
+              <div id="liveHistoryList" class="report-list compact">
+                <div class="report-card">实盘未启用，暂无真实交易历史。</div>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>实盘交易对表现</h3>
+                <span class="badge neutral">Freqtrade</span>
+              </div>
+              <div id="livePerformanceList" class="perf-list"></div>
+            </article>
+          </div>
+
+          <article class="panel simulation-detail-panel">
+            <div class="panel-head">
+              <h3>实盘交易详情</h3>
+              <span class="badge neutral">未选择</span>
+            </div>
+            <div id="liveDetail" class="backtest-detail-empty">实盘未启用，暂无真实交易详情。</div>
+          </article>
+        </section>
+
+        <section class="view" id="view-account">
+          <div class="layout-two">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>账户资产</h3>
+                <span class="badge neutral">USDT 估值</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>币种</th>
+                      <th>总额</th>
+                      <th>可用</th>
+                      <th>占用</th>
+                    </tr>
+                  </thead>
+                  <tbody id="balanceRows"></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>安全锁</h3>
+                <span id="safetyBadge" class="badge">检查中</span>
+              </div>
+              <div id="safetyList" class="check-list"></div>
+            </article>
+          </div>
+
+          <article class="panel risk-actions">
+            <div class="panel-head">
+              <div>
+                <h3>风控操作</h3>
+                <p class="panel-note">这些按钮会直接影响当前 Freqtrade 运行状态。</p>
+              </div>
+              <span class="badge warn">人工确认区</span>
+            </div>
+            <div class="risk-button-row">
+              <button id="riskStopEntryBtn" class="button warn" type="button">停止开仓</button>
+              <button id="riskGlobalStopBtn" class="button danger" type="button">平仓并全局停止</button>
+            </div>
+            <p class="hint">停止开仓只禁止新买入；平仓并全局停止会尝试关闭所有持仓，再停止机器人。</p>
+          </article>
+        </section>
+
+        <section class="view" id="view-reports">
+          <div class="layout-two">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>报告归档</h3>
+                <span class="badge neutral">回测 / 模拟 / 实盘</span>
+              </div>
+              <div id="reportArchiveList" class="report-list"></div>
+            </article>
+
+            <article class="panel logs-panel">
+              <div class="panel-head">
+                <h3>运行日志</h3>
+                <span class="badge neutral" id="logCount">--</span>
+              </div>
+              <div id="errorBox" class="errors hidden"></div>
+              <pre id="logsText" class="logs"></pre>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

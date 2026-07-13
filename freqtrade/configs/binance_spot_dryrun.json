@@ -1,0 +1,123 @@
+{
+  "$schema": "https://schema.freqtrade.io/schema.json",
+  "bot_name": "aiquant-binance-spot-testnet-dryrun",
+  "initial_state": "stopped",
+  "max_open_trades": 3,
+  "stake_currency": "USDT",
+  "stake_amount": 1000.0,
+  "tradable_balance_ratio": 0.99,
+  "fiat_display_currency": "USD",
+  "dry_run": true,
+  "dry_run_wallet": 10000.0,
+  "cancel_open_orders_on_exit": false,
+  "trading_mode": "spot",
+  "margin_mode": "",
+  "timeframe": "1m",
+  "strategy": "FastFlipTestSpot",
+  "db_url": "sqlite:///user_data/tradesv3.dryrun.sqlite",
+  "exchange": {
+    "name": "binance",
+    "sandbox": true,
+    "key": "",
+    "secret": "",
+    "ccxt_config": {
+      "enableRateLimit": true,
+      "options": {
+        "defaultType": "spot",
+        "fetchCurrencies": false,
+        "fetchMarkets": {
+          "types": [
+            "spot"
+          ]
+        }
+      },
+      "urls": {
+        "api": {
+          "public": "https://data-api.binance.vision/api/v3",
+          "v1": "https://data-api.binance.vision/api/v1"
+        }
+      }
+    },
+    "ccxt_async_config": {
+      "enableRateLimit": true,
+      "rateLimit": 200,
+      "options": {
+        "defaultType": "spot",
+        "fetchCurrencies": false,
+        "fetchMarkets": {
+          "types": [
+            "spot"
+          ]
+        }
+      },
+      "urls": {
+        "api": {
+          "public": "https://data-api.binance.vision/api/v3",
+          "v1": "https://data-api.binance.vision/api/v1"
+        }
+      }
+    },
+    "pair_whitelist": [
+      "BTC/USDT"
+    ],
+    "pair_blacklist": [
+      ".*UP/USDT",
+      ".*DOWN/USDT",
+      ".*BULL/USDT",
+      ".*BEAR/USDT"
+    ]
+  },
+  "pairlists": [
+    {
+      "method": "StaticPairList"
+    }
+  ],
+  "entry_pricing": {
+    "price_side": "same",
+    "use_order_book": true,
+    "order_book_top": 1,
+    "price_last_balance": 0.0,
+    "check_depth_of_market": {
+      "enabled": false,
+      "bids_to_ask_delta": 1
+    }
+  },
+  "exit_pricing": {
+    "price_side": "same",
+    "use_order_book": true,
+    "order_book_top": 1
+  },
+  "order_types": {
+    "entry": "limit",
+    "exit": "limit",
+    "emergency_exit": "market",
+    "force_entry": "market",
+    "force_exit": "market",
+    "stoploss": "market",
+    "stoploss_on_exchange": false
+  },
+  "order_time_in_force": {
+    "entry": "GTC",
+    "exit": "GTC"
+  },
+  "telegram": {
+    "enabled": false,
+    "token": "",
+    "chat_id": ""
+  },
+  "api_server": {
+    "enabled": true,
+    "listen_ip_address": "0.0.0.0",
+    "listen_port": 8080,
+    "verbosity": "error",
+    "enable_openapi": true,
+    "jwt_secret_key": "aiquant-local-dryrun-jwt-secret-change-me",
+    "ws_token": "aiquant-local-dryrun-websocket-token-change-me",
+    "CORS_origins": [],
+    "username": "aiquant",
+    "password": "aiquant-local-only-change-me"
+  },
+  "internals": {
+    "process_throttle_secs": 5
+  }
+}
