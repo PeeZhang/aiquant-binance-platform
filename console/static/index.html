@@ -904,7 +904,11 @@
             <article class="panel">
               <div class="panel-head">
                 <h3>报告归档</h3>
-                <span class="badge neutral">回测 / 模拟 / 实盘</span>
+                <div class="report-tabs" role="tablist" aria-label="报告类型">
+                  <button class="report-tab active" type="button" role="tab" aria-selected="true" data-report-tab="backtest">回测</button>
+                  <button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="simulation">模拟</button>
+                  <button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="live">实盘</button>
+                </div>
               </div>
               <div id="reportArchiveList" class="report-list"></div>
             </article>

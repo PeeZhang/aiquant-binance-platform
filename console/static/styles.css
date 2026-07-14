@@ -1038,6 +1038,43 @@ td.negative {
   grid-template-columns: 1fr;
 }
 
+.report-tabs {
+  display: inline-flex;
+  gap: 3px;
+  min-height: 40px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #e8ede7;
+}
+
+.report-tab {
+  min-width: 58px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: transparent;
+  color: #566477;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.report-tab:hover {
+  color: var(--teal);
+}
+
+.report-tab.active {
+  background: #ffffff;
+  color: var(--teal);
+  box-shadow: 0 1px 5px rgba(24, 32, 27, 0.12);
+}
+
+.report-empty-card {
+  grid-column: 1 / -1;
+}
+
 #backtestList,
 #simulationHistoryList,
 #hyperoptList {
@@ -1943,6 +1980,14 @@ td.negative {
 
   .live-lock {
     display: grid;
+  }
+
+  .report-tabs {
+    width: 100%;
+  }
+
+  .report-tab {
+    flex: 1 1 0;
   }
 
   .ticker-grid {

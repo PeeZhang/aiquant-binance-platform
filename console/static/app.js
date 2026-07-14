@@ -26,6 +26,7 @@ const state = {
   backtestDetail: null,
   backtestRunning: false,
   hyperoptRunning: false,
+  reportTab: "backtest",
   view: "dashboard",
 };
 
@@ -851,6 +852,9 @@ function renderLive(snapshot) {
       : "当前项目仍处于 dry-run / sandbox 阶段。实盘按钮仅作为页面结构预留。";
     warning.classList.toggle("hidden", false);
   }
+  if (state.reportTab === "live") {
+    renderReportArchive();
+  }
 }
 
 function renderLiveTradeRows(trades, config) {
@@ -962,12 +966,105 @@ function renderLivePerformance(items, liveEnabled) {
   }
 }
 
+function setReportTab(tab) {
+  if (!["backtest", "simulation", "live"].includes(tab)) return;
+  state.reportTab = tab;
+  renderReportArchive();
+}
+
+function syncReportTabs() {
+  document.querySelectorAll("[data-report-tab]").forEach((button) => {
+    const active = button.dataset.reportTab === state.reportTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+}
+
+function renderReportArchive() {
+  syncReportTabs();
+  if (state.reportTab === "simulation") {
+    renderSimulationReportArchive();
+    return;
+  }
+  if (state.reportTab === "live") {
+    renderLiveReportArchive();
+    return;
+  }
+  renderBacktestCards("reportArchiveList", state.backtests || [], false, false);
+}
+
+function renderSimulationReportArchive() {
+  const box = $("reportArchiveList");
+  if (!box) return;
+  const items = state.simulation?.history || [];
+  box.innerHTML = "";
+  if (!items.length) {
+    box.innerHTML = `<div class="report-card report-empty-card">暂无模拟交易报告</div>`;
+    return;
+  }
+  for (const item of items) {
+    const metrics = item.metrics || {};
+    const version = item.strategy_version;
+    const detailButton = item.id
+      ? `<button class="record-detail-button" type="button" data-simulation-id="${escapeHTML(item.id)}">详情</button>`
+      : "";
+    const activeClass = item.id && item.id === state.selectedSimulationHistoryId ? " active" : "";
+    box.insertAdjacentHTML(
+      "beforeend",
+      `<div class="report-card${activeClass}">
+        <div class="report-card-head">
+          <h4>${escapeHTML(item.strategy || "--")}</h4>
+          <div class="report-card-actions">${detailButton}</div>
+        </div>
+        <p class="report-subtitle">${escapeHTML(item.pair || "--")} · ${escapeHTML(item.started_at || "--")} 至 ${escapeHTML(item.ended_at || "--")}</p>
+        <p class="report-subtitle">策略版本：${escapeHTML(strategyVersionName(version))}</p>
+        <div class="report-metrics">
+          <div><span>交易数</span><strong>${escapeHTML(metrics.trade_count ?? 0)}</strong></div>
+          <div><span>收益</span><strong class="${classifyNumber(metrics.profit_abs)}">${fmtNumber(metrics.profit_abs, 4)} USDT</strong></div>
+          <div><span>收益率</span><strong class="${classifyNumber(metrics.profit_ratio)}">${fmtPercent(metrics.profit_ratio || 0)}</strong></div>
+          <div><span>运行时长</span><strong>${escapeHTML(fmtDuration(metrics.duration_seconds || 0))}</strong></div>
+          <div><span>开始时间</span><strong>${escapeHTML(item.started_at || "--")}</strong></div>
+          <div><span>结束时间</span><strong>${escapeHTML(item.ended_at || "--")}</strong></div>
+        </div>
+      </div>`,
+    );
+  }
+}
+
+function renderLiveReportArchive() {
+  const box = $("reportArchiveList");
+  if (!box) return;
+  const config = state.snapshot?.local_config || {};
+  const liveEnabled = config.dry_run === false;
+  box.innerHTML = "";
+  if (!liveEnabled) {
+    box.innerHTML = `<div class="report-card report-empty-card">
+      <h4>实盘报告未启用</h4>
+      <p class="report-subtitle">当前 profile 仍是 dry-run / sandbox。未来接入独立 live profile 后，这里会归档真实交易报告。</p>
+      <div class="report-metrics two">
+        <div><span>运行模式</span><strong>${escapeHTML(config.trading_mode || "--")}</strong></div>
+        <div><span>dry-run</span><strong>${escapeHTML(String(config.dry_run))}</strong></div>
+        <div><span>沙盒</span><strong>${escapeHTML(String(config.sandbox))}</strong></div>
+        <div><span>资金边界</span><strong>安全锁定</strong></div>
+      </div>
+    </div>`;
+    return;
+  }
+  box.innerHTML = `<div class="report-card report-empty-card">
+    <h4>实盘运行中</h4>
+    <p class="report-subtitle">当前 profile 已不是 dry-run。实盘报告归档需要接入独立审计记录后再展示。</p>
+  </div>`;
+}
+
 function renderSimulationHistory(items) {
   const box = $("simulationHistoryList");
   if (!box) return;
   box.innerHTML = "";
   if (!items.length) {
     box.innerHTML = `<div class="report-card">暂无模拟交易记录</div>`;
+    if (state.reportTab === "simulation") {
+      renderReportArchive();
+    }
     return;
   }
   for (const item of items) {
@@ -998,6 +1095,9 @@ function renderSimulationHistory(items) {
         </div>
       </div>`,
     );
+  }
+  if (state.reportTab === "simulation") {
+    renderReportArchive();
   }
 }
 
@@ -2136,7 +2236,9 @@ function drawKlineOnCanvas(canvasId, emptyId, candles, markers = []) {
 
 function renderBacktests(items) {
   renderBacktestCards("backtestList", items, true, true);
-  renderBacktestCards("reportArchiveList", items, false, false);
+  if (state.reportTab === "backtest") {
+    renderReportArchive();
+  }
   if (!state.backtestDetail) {
     renderBacktestDetail(null);
   }
@@ -2977,6 +3079,11 @@ document.addEventListener("click", (event) => {
   if (button.dataset.dataAction === "repair") repairDataset(datasetId);
   if (button.dataset.dataAction === "rename") renameDataset(datasetId, button.dataset.currentName);
   if (button.dataset.dataAction === "delete") deleteDataset(datasetId);
+});
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-report-tab]");
+  if (!button) return;
+  setReportTab(button.dataset.reportTab);
 });
 $("simulationInterval").addEventListener("change", loadSimulationMarketData);
 $("simulationWindow").addEventListener("change", loadSimulationMarketData);
