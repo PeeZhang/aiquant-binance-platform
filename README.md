@@ -1,4 +1,3 @@
-test
 # aiquant
 
 Binance Spot quant research platform using Freqtrade as the core engine.
