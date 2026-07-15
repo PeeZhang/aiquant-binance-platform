@@ -985,9 +985,10 @@
               <span class="badge neutral">支持导出为 Markdown</span>
             </div>
             <div class="report-tabs" role="tablist" aria-label="报告归档分类">
-              <button class="report-tab active" type="button" data-report-tab="backtest">回测</button>
-              <button class="report-tab" type="button" data-report-tab="simulation">模拟</button>
-              <button class="report-tab" type="button" data-report-tab="experiment">实验</button>
+              <button class="report-tab active" type="button" role="tab" aria-selected="true" data-report-tab="backtest">回测</button>
+              <button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="simulation">模拟</button>
+              <button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="experiment">实验</button>
+              <button class="report-tab" type="button" role="tab" aria-selected="false" data-report-tab="live">实盘</button>
             </div>
             <div class="report-tab-panel active" id="reportTab-backtest">
               <div id="reportArchiveList" class="report-list"></div>
@@ -997,6 +998,9 @@
             </div>
             <div class="report-tab-panel" id="reportTab-experiment">
               <div id="reportExperimentList" class="report-list"></div>
+            </div>
+            <div class="report-tab-panel" id="reportTab-live">
+              <div id="reportLiveList" class="report-list"></div>
             </div>
             <p id="reportExportHint" class="hint hidden"></p>
           </article>

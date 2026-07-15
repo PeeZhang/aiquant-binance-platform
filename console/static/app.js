@@ -26,13 +26,13 @@ const state = {
   backtestDetail: null,
   backtestRunning: false,
   hyperoptRunning: false,
+  reportTab: "backtest",
   view: "dashboard",
   experiments: [],
   editingExperimentId: null,
   batchRanges: [],
   selectedQualityDatasetId: null,
   qualityDetail: null,
-  reportTab: "backtest",
 };
 
 const viewMeta = {
@@ -863,6 +863,7 @@ function renderLive(snapshot) {
       : "当前项目仍处于 dry-run / sandbox 阶段。实盘按钮仅作为页面结构预留。";
     warning.classList.toggle("hidden", false);
   }
+  renderReportLiveList(config, liveEnabled);
 }
 
 function renderLiveTradeRows(trades, config) {
@@ -974,12 +975,36 @@ function renderLivePerformance(items, liveEnabled) {
   }
 }
 
+function renderReportLiveList(config, liveEnabled) {
+  const box = $("reportLiveList");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!liveEnabled) {
+    box.innerHTML = `<div class="report-card report-empty-card">
+      <h4>实盘报告未启用</h4>
+      <p class="report-subtitle">当前 profile 仍是 dry-run / sandbox。未来接入独立 live profile 后，这里会归档真实交易报告。</p>
+      <div class="report-metrics two">
+        <div><span>运行模式</span><strong>${escapeHTML(config.trading_mode || "--")}</strong></div>
+        <div><span>dry-run</span><strong>${escapeHTML(String(config.dry_run))}</strong></div>
+        <div><span>沙盒</span><strong>${escapeHTML(String(config.sandbox))}</strong></div>
+        <div><span>资金边界</span><strong>安全锁定</strong></div>
+      </div>
+    </div>`;
+    return;
+  }
+  box.innerHTML = `<div class="report-card report-empty-card">
+    <h4>实盘运行中</h4>
+    <p class="report-subtitle">当前 profile 已不是 dry-run。实盘报告归档需要接入独立审计记录后再展示。</p>
+  </div>`;
+}
+
 function renderSimulationHistory(items) {
   const box = $("simulationHistoryList");
   if (!box) return;
   box.innerHTML = "";
   if (!items.length) {
     box.innerHTML = `<div class="report-card">暂无模拟交易记录</div>`;
+    renderReportSimulationList(items);
     return;
   }
   for (const item of items) {
@@ -1011,6 +1036,7 @@ function renderSimulationHistory(items) {
       </div>`,
     );
   }
+  renderReportSimulationList(items);
 }
 
 function simulationSessionBounds(record, options = {}) {
@@ -2675,6 +2701,8 @@ function renderReportTabs() {
   renderReportBacktestList(state.backtests);
   renderReportSimulationList(state.simulation?.history || []);
   renderReportExperimentList(state.experiments);
+  const config = state.snapshot?.local_config || {};
+  renderReportLiveList(config, config.dry_run === false);
 }
 
 function switchReportTab(tab) {
