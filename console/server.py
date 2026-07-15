@@ -36,6 +36,7 @@ HYPEROPT_RESULTS_ROOT = PROJECT_ROOT / "freqtrade" / "user_data" / "hyperopt_res
 SIMULATION_STATE_PATH = STATE_ROOT / "simulation_state.json"
 SIMULATION_HISTORY_PATH = STATE_ROOT / "simulation_history.json"
 DATA_NAMES_PATH = STATE_ROOT / "data_names.json"
+EXPERIMENTS_PATH = STATE_ROOT / "experiments.json"
 USER_DATA_ROOT = PROJECT_ROOT / "freqtrade" / "user_data"
 RUNTIME_CONFIG_ROOT = STATE_ROOT / "runtime_configs"
 ALLOWED_DATA_SUFFIXES = {".feather", ".json", ".gz"}
@@ -1000,6 +1001,192 @@ def compact_trades(trades: list[dict[str, Any]], limit: int = 240) -> list[dict[
     ]
 
 
+def _equity_series_with_time(result: dict[str, Any], trades: list[dict[str, Any]]) -> list[tuple[Any, float]]:
+    """内部辅助：返回 (time, equity) 序列，用于回撤区间/月度收益计算。不做降采样。"""
+    start_balance = float_or_none(metric_value(result, "starting_balance", "dry_run_wallet")) or 0
+    daily_profit = result.get("daily_profit")
+    if isinstance(daily_profit, list) and daily_profit:
+        balance = start_balance
+        series: list[tuple[Any, float]] = []
+        for row in daily_profit:
+            if not isinstance(row, list) or len(row) < 2:
+                continue
+            profit = float_or_none(row[1]) or 0
+            balance += profit
+            series.append((row[0], balance))
+        return series
+
+    balance = start_balance
+    series = []
+    closed = sorted(
+        [trade for trade in trades if trade.get("close_timestamp") or trade.get("close_date")],
+        key=lambda trade: trade.get("close_timestamp") or trade.get("close_date") or "",
+    )
+    for trade in closed:
+        balance += float_or_none(trade.get("profit_abs")) or 0
+        series.append((trade.get("close_date") or trade.get("close_timestamp"), balance))
+    return series
+
+
+def max_drawdown_period(result: dict[str, Any], trades: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """从权益序列推导最大回撤发生的区间（峰值时间 -> 谷值时间）及回撤深度。数据不足返回 None。"""
+    series = _equity_series_with_time(result, trades)
+    if len(series) < 2:
+        return None
+    peak_value = series[0][1]
+    peak_time = series[0][0]
+    worst = {"depth_abs": 0.0, "depth_pct": 0.0, "peak_time": None, "trough_time": None}
+    for time_value, equity in series:
+        if equity > peak_value:
+            peak_value = equity
+            peak_time = time_value
+        drawdown_abs = peak_value - equity
+        drawdown_pct = (drawdown_abs / peak_value) if peak_value else 0
+        if drawdown_abs > worst["depth_abs"]:
+            worst = {
+                "depth_abs": drawdown_abs,
+                "depth_pct": drawdown_pct,
+                "peak_time": peak_time,
+                "trough_time": time_value,
+            }
+    if worst["depth_abs"] <= 0 or not worst["peak_time"]:
+        return None
+    return {
+        "peak_time": str(worst["peak_time"]),
+        "trough_time": str(worst["trough_time"]),
+        "depth_abs": round(worst["depth_abs"], 8),
+        "depth_pct": round(worst["depth_pct"], 6),
+    }
+
+
+def monthly_returns(result: dict[str, Any], trades: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """按自然月汇总收益（用月末权益 - 月初权益）。数据不足返回 None。"""
+    series = _equity_series_with_time(result, trades)
+    if len(series) < 2:
+        return None
+    buckets: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for time_value, equity in series:
+        text = str(time_value)
+        month_key = text[:7] if len(text) >= 7 and text[4] == "-" else None
+        if not month_key:
+            continue
+        if month_key not in buckets:
+            buckets[month_key] = {"start_equity": equity, "end_equity": equity}
+            order.append(month_key)
+        buckets[month_key]["end_equity"] = equity
+    if not buckets:
+        return None
+    rows = []
+    for month_key in order:
+        bucket = buckets[month_key]
+        profit_abs = bucket["end_equity"] - bucket["start_equity"]
+        rows.append(
+            {
+                "month": month_key,
+                "start_equity": round(bucket["start_equity"], 8),
+                "end_equity": round(bucket["end_equity"], 8),
+                "profit_abs": round(profit_abs, 8),
+            }
+        )
+    return rows
+
+
+PROFIT_DISTRIBUTION_BUCKETS = [
+    (-float("inf"), -0.05, "< -5%"),
+    (-0.05, -0.02, "-5% ~ -2%"),
+    (-0.02, 0.0, "-2% ~ 0%"),
+    (0.0, 0.02, "0% ~ 2%"),
+    (0.02, 0.05, "2% ~ 5%"),
+    (0.05, float("inf"), "> 5%"),
+]
+
+
+def profit_distribution(trades: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """按收益率分桶统计交易笔数。没有已平仓交易返回 None。"""
+    closed = [t for t in trades if not t.get("is_open") and t.get("profit_ratio") is not None]
+    if not closed:
+        return None
+    rows = []
+    for low, high, label in PROFIT_DISTRIBUTION_BUCKETS:
+        count = sum(1 for t in closed if low <= (float_or_none(t.get("profit_ratio")) or 0) < high)
+        rows.append({"bucket": label, "count": count})
+    return rows
+
+
+def max_consecutive_losses(trades: list[dict[str, Any]]) -> int | None:
+    """按平仓时间顺序统计最长连续亏损笔数。没有已平仓交易返回 None。"""
+    closed = sorted(
+        [t for t in trades if not t.get("is_open") and t.get("close_timestamp") or (not t.get("is_open") and t.get("close_date"))],
+        key=lambda t: t.get("close_timestamp") or t.get("close_date") or "",
+    )
+    if not closed:
+        return None
+    best = 0
+    current = 0
+    for trade in closed:
+        profit_abs = float_or_none(trade.get("profit_abs"))
+        if profit_abs is not None and profit_abs < 0:
+            current += 1
+            best = max(best, current)
+        else:
+            current = 0
+    return best
+
+
+def average_holding_duration(trades: list[dict[str, Any]]) -> float | None:
+    """交易的平均持仓时长（分钟）。trade_duration 字段本身就是分钟数（Freqtrade 约定）。"""
+    durations = [
+        float_or_none(t.get("trade_duration"))
+        for t in trades
+        if not t.get("is_open") and float_or_none(t.get("trade_duration")) is not None
+    ]
+    if not durations:
+        return None
+    return round(sum(durations) / len(durations), 2)
+
+
+def best_worst_trade(trades: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """收益最高和最低的一笔已平仓交易摘要。没有已平仓交易返回 None。"""
+    closed = [t for t in trades if not t.get("is_open") and t.get("profit_abs") is not None]
+    if not closed:
+        return None
+
+    def _summarize(trade: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "pair": trade.get("pair"),
+            "open_date": trade.get("open_date"),
+            "close_date": trade.get("close_date"),
+            "profit_ratio": trade.get("profit_ratio"),
+            "profit_abs": trade.get("profit_abs"),
+            "exit_reason": trade.get("exit_reason"),
+        }
+
+    best = max(closed, key=lambda t: float_or_none(t.get("profit_abs")) or 0)
+    worst = min(closed, key=lambda t: float_or_none(t.get("profit_abs")) or 0)
+    return {"best": _summarize(best), "worst": _summarize(worst)}
+
+
+def compute_advanced_metrics(result_path: Path, requested: dict[str, Any]) -> dict[str, Any]:
+    """从 Freqtrade 原始回测导出解析复盘增强指标。任何字段解析不出都保持 None，前端显示"暂无数据"。"""
+    try:
+        payload = load_backtest_payload(result_path)
+    except Exception:  # noqa: BLE001
+        return {}
+    strategy_name, result = strategy_result_from_payload(payload, requested.get("strategy"))
+    trades = result.get("trades", [])
+    if not isinstance(trades, list):
+        trades = []
+    return {
+        "max_drawdown_period": max_drawdown_period(result, trades),
+        "monthly_returns": monthly_returns(result, trades),
+        "profit_distribution": profit_distribution(trades),
+        "max_consecutive_losses": max_consecutive_losses(trades),
+        "avg_holding_minutes": average_holding_duration(trades),
+        "best_worst_trade": best_worst_trade(trades),
+    }
+
+
 def backtest_detail(record_id: str) -> dict[str, Any]:
     record = next((item for item in load_backtest_history() if str(item.get("id")) == str(record_id)), None)
     if not record:
@@ -1039,6 +1226,14 @@ def backtest_detail(record_id: str) -> dict[str, Any]:
         "best_pair": result.get("best_pair"),
         "worst_pair": result.get("worst_pair"),
     }
+    advanced_metrics = record.get("advanced_metrics") or {
+        "max_drawdown_period": max_drawdown_period(result, trades),
+        "monthly_returns": monthly_returns(result, trades),
+        "profit_distribution": profit_distribution(trades),
+        "max_consecutive_losses": max_consecutive_losses(trades),
+        "avg_holding_minutes": average_holding_duration(trades),
+        "best_worst_trade": best_worst_trade(trades),
+    }
     return {
         "ok": True,
         "id": record_id,
@@ -1050,6 +1245,7 @@ def backtest_detail(record_id: str) -> dict[str, Any]:
         "exit_reasons": compact_stat_rows(result.get("exit_reason_summary")),
         "trades": compact_trades(trades),
         "trade_count": len(trades),
+        "advanced_metrics": advanced_metrics,
     }
 
 
@@ -1863,6 +2059,100 @@ def save_data_names(names: dict[str, str]) -> None:
     )
 
 
+def load_experiments() -> list[dict[str, Any]]:
+    if not EXPERIMENTS_PATH.exists():
+        return []
+    payload = read_json(EXPERIMENTS_PATH)
+    items = payload.get("items", [])
+    return items if isinstance(items, list) else []
+
+
+def save_experiments(items: list[dict[str, Any]]) -> None:
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    EXPERIMENTS_PATH.write_text(
+        json.dumps({"items": items[:300]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def create_experiment(payload: dict[str, Any]) -> dict[str, Any]:
+    """新建一条策略参数实验记录，只做基础字段落盘，不校验策略/数据集是否仍存在（可能是历史回溯记录）。"""
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError("实验名称不能为空")
+    now = datetime.now().isoformat(timespec="seconds")
+    item = {
+        "id": datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
+        "name": name[:120],
+        "purpose": str(payload.get("purpose") or "")[:2000],
+        "strategy": str(payload.get("strategy") or ""),
+        "dataset_id": str(payload.get("dataset_id") or ""),
+        "dataset_name": str(payload.get("dataset_name") or ""),
+        "pair": str(payload.get("pair") or ""),
+        "start": str(payload.get("start") or ""),
+        "end": str(payload.get("end") or ""),
+        "strategy_version_id": str(payload.get("strategy_version_id") or ""),
+        "params_summary": str(payload.get("params_summary") or ""),
+        "result_summary": str(payload.get("result_summary") or "")[:4000],
+        "conclusion": str(payload.get("conclusion") or "")[:4000],
+        "promoted_to_simulation": bool(payload.get("promoted_to_simulation")),
+        "backtest_id": str(payload.get("backtest_id") or ""),
+        "created_at": now,
+        "updated_at": now,
+    }
+    items = [item] + load_experiments()
+    save_experiments(items)
+    return {"ok": True, "item": item, "items": items}
+
+
+EXPERIMENT_EDITABLE_FIELDS = {
+    "name",
+    "purpose",
+    "conclusion",
+    "result_summary",
+    "params_summary",
+    "promoted_to_simulation",
+}
+
+
+def update_experiment(payload: dict[str, Any]) -> dict[str, Any]:
+    """编辑实验记录（查看/编辑结论场景）。只允许修改白名单字段，其余身份/来源字段保持不变。"""
+    experiment_id = str(payload.get("id") or "").strip()
+    if not experiment_id:
+        raise ValueError("缺少实验记录 ID")
+    items = load_experiments()
+    target = next((item for item in items if item.get("id") == experiment_id), None)
+    if not target:
+        raise ValueError("没有找到指定实验记录")
+    for key in EXPERIMENT_EDITABLE_FIELDS:
+        if key not in payload:
+            continue
+        if key == "promoted_to_simulation":
+            target[key] = bool(payload[key])
+        elif key == "name":
+            name = str(payload[key]).strip()
+            if not name:
+                raise ValueError("实验名称不能为空")
+            target[key] = name[:120]
+        else:
+            target[key] = str(payload[key])[:4000]
+    target["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    save_experiments(items)
+    return {"ok": True, "item": target, "items": items}
+
+
+def delete_experiment(experiment_id: str) -> dict[str, Any]:
+    experiment_id = str(experiment_id or "").strip()
+    if not experiment_id:
+        raise ValueError("缺少实验记录 ID")
+    items = load_experiments()
+    kept = [item for item in items if item.get("id") != experiment_id]
+    if len(kept) == len(items):
+        raise ValueError("未找到这条实验记录，可能它已经被删除。")
+    save_experiments(kept)
+    return {"ok": True, "id": experiment_id, "items": kept}
+
+
 def resolve_dataset_path(dataset_id: str) -> Path:
     raw = str(dataset_id or "").replace("\\", "/").strip()
     if not raw:
@@ -2136,7 +2426,126 @@ def find_dataset(dataset_id: str) -> dict[str, Any]:
     raise ValueError("没有找到指定本地数据集")
 
 
-def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
+MAX_GAP_ROWS = 50
+MAX_ANOMALY_ROWS = 50
+
+
+def dataset_quality_detail(dataset_id: str) -> dict[str, Any]:
+    """数据质量详情：首尾K线、缺口列表、异常价格/成交量提示、是否适合回测。
+
+    只读取必要列（date/open/high/low/close/volume），避免大文件一次性全量渲染；
+    缺口和异常各只返回前 MAX_GAP_ROWS / MAX_ANOMALY_ROWS 条，附带总数供前端提示"仅显示前 N 条"。
+    """
+    dataset = find_dataset(dataset_id)
+    path = resolve_dataset_path(dataset_id)
+    detail: dict[str, Any] = {
+        "dataset": dataset,
+        "first_candles": [],
+        "last_candles": [],
+        "gaps": [],
+        "gap_total": 0,
+        "price_anomalies": [],
+        "price_anomaly_total": 0,
+        "volume_anomalies": [],
+        "volume_anomaly_total": 0,
+        "suitable_for_backtest": None,
+        "suitability_reasons": [],
+        "parse_error": None,
+    }
+    if path.suffix.lower() != ".feather":
+        detail["parse_error"] = "仅支持 .feather 格式的数据文件详情解析"
+        return detail
+
+    try:
+        import pandas as pd  # type: ignore
+
+        df = pd.read_feather(path)
+    except Exception as exc:  # noqa: BLE001
+        detail["parse_error"] = f"解析失败: {exc}"
+        return detail
+
+    if df.empty or "date" not in df.columns:
+        detail["parse_error"] = "数据为空或缺少 date 列"
+        return detail
+
+    df = df.sort_values("date").reset_index(drop=True)
+    df["date"] = pd.to_datetime(df["date"], utc=True)
+
+    def row_to_candle(row: Any) -> dict[str, Any]:
+        return {
+            "date": row["date"].isoformat(),
+            "open": float_or_none(row.get("open")),
+            "high": float_or_none(row.get("high")),
+            "low": float_or_none(row.get("low")),
+            "close": float_or_none(row.get("close")),
+            "volume": float_or_none(row.get("volume")),
+        }
+
+    detail["first_candles"] = [row_to_candle(df.iloc[i]) for i in range(min(5, len(df)))]
+    detail["last_candles"] = [row_to_candle(df.iloc[i]) for i in range(max(0, len(df) - 5), len(df))]
+
+    timeframe = dataset.get("timeframe")
+    interval_seconds = timeframe_to_seconds(timeframe)
+    reasons: list[str] = []
+    gap_rows: list[dict[str, Any]] = []
+    if interval_seconds:
+        deltas = df["date"].diff().dt.total_seconds()
+        gap_mask = deltas > interval_seconds * 1.5
+        gap_indices = df.index[gap_mask.fillna(False)]
+        for idx in gap_indices:
+            prev_time = df.loc[idx - 1, "date"] if idx - 1 in df.index else None
+            cur_time = df.loc[idx, "date"]
+            missing = 0
+            if prev_time is not None:
+                missing = max(0, round((cur_time - prev_time).total_seconds() / interval_seconds) - 1)
+            gap_rows.append(
+                {
+                    "from": prev_time.isoformat() if prev_time is not None else None,
+                    "to": cur_time.isoformat(),
+                    "missing_candles": missing,
+                }
+            )
+        detail["gap_total"] = len(gap_rows)
+        detail["gaps"] = gap_rows[:MAX_GAP_ROWS]
+        if len(gap_rows) > MAX_GAP_ROWS:
+            reasons.append(f"共 {len(gap_rows)} 处缺口，仅显示前 {MAX_GAP_ROWS} 条")
+
+    # 异常价格：high < low，或 close/open 超出 [low, high] 范围
+    price_anomaly_mask = (df["high"] < df["low"]) | (df["close"] > df["high"]) | (df["close"] < df["low"]) | (df["open"] > df["high"]) | (df["open"] < df["low"])
+    price_anomaly_rows = df[price_anomaly_mask]
+    detail["price_anomaly_total"] = int(len(price_anomaly_rows))
+    detail["price_anomalies"] = [
+        {**row_to_candle(price_anomaly_rows.iloc[i]), "reason": "high/low/open/close 关系异常"}
+        for i in range(min(MAX_ANOMALY_ROWS, len(price_anomaly_rows)))
+    ]
+
+    # 异常成交量：0 或超过均值 10 倍（简单统计口径，非模型判定）
+    if "volume" in df.columns and len(df) > 1:
+        volume_mean = float(df["volume"].mean() or 0)
+        volume_anomaly_mask = df["volume"] <= 0
+        if volume_mean > 0:
+            volume_anomaly_mask = volume_anomaly_mask | (df["volume"] > volume_mean * 10)
+        volume_anomaly_rows = df[volume_anomaly_mask]
+        detail["volume_anomaly_total"] = int(len(volume_anomaly_rows))
+        detail["volume_anomalies"] = [
+            {**row_to_candle(volume_anomaly_rows.iloc[i]), "reason": "成交量为 0 或远超均值 10 倍"}
+            for i in range(min(MAX_ANOMALY_ROWS, len(volume_anomaly_rows)))
+        ]
+
+    completeness = dataset.get("completeness")
+    if completeness is not None and completeness < 0.98:
+        reasons.append(f"完整度 {completeness * 100:.1f}% 低于 98%")
+    if detail["price_anomaly_total"] > 0:
+        reasons.append(f"存在 {detail['price_anomaly_total']} 条价格异常")
+    if len(df) < 30:
+        reasons.append("K线数量过少（<30），统计意义有限")
+    detail["suitability_reasons"] = reasons
+    detail["suitable_for_backtest"] = len(reasons) == 0
+    return detail
+
+
+def resolve_backtest_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """校验单次回测的请求参数，返回标准化后的 strategy/version/dataset/时间范围。"""
     strategy = str(payload.get("strategy", "")).strip()
     if strategy not in known_strategy_names():
         raise ValueError(f"策略不存在: {strategy}")
@@ -2150,7 +2559,17 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("回测结束时间晚于本地数据结束时间")
     if start >= end:
         raise ValueError("回测起始时间必须早于结束时间")
+    return {
+        "strategy": strategy,
+        "version": version,
+        "dataset": dataset,
+        "start": start,
+        "end": end,
+    }
 
+
+def execute_single_backtest(strategy: str, version: dict[str, Any] | None, dataset: dict[str, Any], start: str, end: str) -> dict[str, Any]:
+    """执行一次 Freqtrade CLI 回测，返回归一化后的历史记录（不落盘，调用方决定是否保存）。"""
     timerange = f"{date_to_timerange_part(start)}-{date_to_timerange_part(end)}"
     pair = str(dataset.get("pair"))
     timeframe = str(dataset.get("timeframe"))
@@ -2217,9 +2636,109 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     result_path = max(new_results, key=lambda path: path.stat().st_mtime)
     record = summarize_backtest_result(result_path, requested)
     record["stdout_tail"] = "\n".join(completed.stdout.splitlines()[-40:])
+    record["advanced_metrics"] = compute_advanced_metrics(result_path, requested)
+    return record
+
+
+def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
+    resolved = resolve_backtest_request(payload)
+    record = execute_single_backtest(
+        resolved["strategy"], resolved["version"], resolved["dataset"], resolved["start"], resolved["end"]
+    )
     history = [record] + load_backtest_history()
     save_backtest_history(history)
     return {"ok": True, "record": record}
+
+
+MAX_BATCH_COMBINATIONS = 20
+
+
+def run_batch_backtest(payload: dict[str, Any]) -> dict[str, Any]:
+    """批量回测：对策略列表 × 数据集列表 × 时间段列表做笛卡尔积，逐个执行并汇总。
+
+    每个维度至少给 1 个值；总组合数超过 MAX_BATCH_COMBINATIONS 会拒绝，避免长时间阻塞。
+    单个组合失败不会中断整批，会记录 error 并继续。
+    """
+    strategies = payload.get("strategies")
+    strategies = [str(item).strip() for item in strategies] if isinstance(strategies, list) else []
+    strategies = [item for item in strategies if item] or ([str(payload.get("strategy", "")).strip()] if payload.get("strategy") else [])
+    if not strategies:
+        raise ValueError("请至少选择一个策略")
+    for strategy in strategies:
+        if strategy not in known_strategy_names():
+            raise ValueError(f"策略不存在: {strategy}")
+
+    version_id = str(payload.get("strategy_version_id") or "").strip()
+
+    dataset_ids = payload.get("dataset_ids")
+    dataset_ids = [str(item).strip() for item in dataset_ids] if isinstance(dataset_ids, list) else []
+    dataset_ids = [item for item in dataset_ids if item] or ([str(payload.get("dataset_id", "")).strip()] if payload.get("dataset_id") else [])
+    if not dataset_ids:
+        raise ValueError("请至少选择一个数据集")
+    datasets = [find_dataset(dataset_id) for dataset_id in dataset_ids]
+
+    ranges = payload.get("ranges")
+    normalized_ranges: list[tuple[str, str]] = []
+    if isinstance(ranges, list) and ranges:
+        for item in ranges:
+            if not isinstance(item, dict):
+                continue
+            start = str(item.get("start", "")).strip()
+            end = str(item.get("end", "")).strip()
+            if start and end:
+                normalized_ranges.append((start, end))
+    if not normalized_ranges:
+        start = str(payload.get("start", "")).strip()
+        end = str(payload.get("end", "")).strip()
+        if not start or not end:
+            raise ValueError("请至少提供一个时间段")
+        normalized_ranges = [(start, end)]
+
+    total_combinations = len(strategies) * len(datasets) * len(normalized_ranges)
+    if total_combinations > MAX_BATCH_COMBINATIONS:
+        raise ValueError(
+            f"组合数 {total_combinations} 超过上限 {MAX_BATCH_COMBINATIONS}，请减少策略/数据集/时间段数量。"
+        )
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for strategy in strategies:
+        version = strategy_version_by_id(version_id, strategy) if version_id else None
+        for dataset in datasets:
+            start_bound = str(dataset.get("start") or "")
+            end_bound = str(dataset.get("end") or "")
+            for start, end in normalized_ranges:
+                combo_desc = {
+                    "strategy": strategy,
+                    "dataset_id": dataset.get("dataset_id"),
+                    "dataset_name": dataset.get("name"),
+                    "start": start,
+                    "end": end,
+                }
+                try:
+                    if start_bound and start < start_bound:
+                        raise ValueError("回测起始时间早于本地数据起始时间")
+                    if end_bound and end > end_bound:
+                        raise ValueError("回测结束时间晚于本地数据结束时间")
+                    if start >= end:
+                        raise ValueError("回测起始时间必须早于结束时间")
+                    record = execute_single_backtest(strategy, version, dataset, start, end)
+                    results.append(record)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append({**combo_desc, "error": str(exc)[:2000]})
+
+    if results:
+        history = results + load_backtest_history()
+        save_backtest_history(history)
+
+    return {
+        "ok": True,
+        "total": total_combinations,
+        "succeeded": len(results),
+        "failed": len(errors),
+        "records": results,
+        "errors": errors,
+    }
 
 
 ALLOWED_HYPEROPT_SPACES = {
@@ -2465,6 +2984,177 @@ def control(action: str) -> dict[str, Any]:
     }
 
 
+EXPORT_ROOT = REPORTS_ROOT  # reports/generated，已被 .gitignore 忽略
+
+
+def _export_write(kind: str, record_id: str, text: str) -> Path:
+    EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
+    safe_id = re.sub(r"[^A-Za-z0-9_\-]", "_", str(record_id))[:60] or "record"
+    filename = f"{kind}-{safe_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+    path = EXPORT_ROOT / filename
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _md_table(headers: list[str], rows: list[list[Any]]) -> str:
+    if not rows:
+        return "_暂无数据_\n"
+    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
+    for row in rows:
+        lines.append("| " + " | ".join("" if v is None else str(v) for v in row) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def export_backtest_report(record_id: str) -> dict[str, Any]:
+    detail = backtest_detail(record_id)
+    summary = detail.get("summary", {})
+    advanced = detail.get("advanced_metrics") or {}
+    lines = [
+        f"# 回测报告 - {summary.get('strategy', '--')}",
+        "",
+        f"- 生成时间: {datetime.now().isoformat(timespec='seconds')}",
+        f"- 交易对: {summary.get('pair', '--')}",
+        f"- 周期: {summary.get('timeframe', '--')}",
+        f"- 时间范围: {summary.get('start', '--')} 至 {summary.get('end', '--')}",
+        f"- 结果文件: `{detail.get('source', '--')}`",
+        "",
+        "## 核心指标",
+        "",
+        _md_table(
+            ["指标", "数值"],
+            [
+                ["总收益", pct_value(summary.get("profit_total"))],
+                ["收益金额", number_value(summary.get("profit_total_abs"))],
+                ["最大回撤", pct_value(summary.get("max_drawdown"))],
+                ["胜率", pct_value(summary.get("winrate"))],
+                ["交易数", summary.get("total_trades") if summary.get("total_trades") is not None else "暂无数据"],
+                ["Profit Factor", number_value(summary.get("profit_factor"))],
+                ["Sharpe", number_value(summary.get("sharpe"))],
+            ],
+        ),
+        "",
+        "## 复盘增强指标",
+        "",
+    ]
+    drawdown_period = advanced.get("max_drawdown_period")
+    if drawdown_period:
+        lines.append(
+            f"- 最大回撤区间: {drawdown_period.get('peak_time')} → {drawdown_period.get('trough_time')}"
+            f"（深度 {pct_value(drawdown_period.get('depth_pct'))}）"
+        )
+    else:
+        lines.append("- 最大回撤区间: 暂无数据")
+    monthly = advanced.get("monthly_returns")
+    lines.append("")
+    lines.append("### 月度收益")
+    lines.append("")
+    if monthly:
+        lines.append(_md_table(["月份", "月初权益", "月末权益", "月收益"], [
+            [row.get("month"), number_value(row.get("start_equity")), number_value(row.get("end_equity")), number_value(row.get("profit_abs"))]
+            for row in monthly
+        ]))
+    else:
+        lines.append("_暂无数据_")
+    distribution = advanced.get("profit_distribution")
+    lines.append("")
+    lines.append("### 收益分布")
+    lines.append("")
+    if distribution:
+        lines.append(_md_table(["收益率区间", "笔数"], [[row.get("bucket"), row.get("count")] for row in distribution]))
+    else:
+        lines.append("_暂无数据_")
+    max_losses = advanced.get("max_consecutive_losses")
+    avg_holding = advanced.get("avg_holding_minutes")
+    lines.append("")
+    lines.append(f"- 最长连续亏损笔数: {max_losses if max_losses is not None else '暂无数据'}")
+    lines.append(f"- 平均持仓时长(分钟): {avg_holding if avg_holding is not None else '暂无数据'}")
+    best_worst = advanced.get("best_worst_trade")
+    lines.append("")
+    lines.append("### 最好/最差交易")
+    lines.append("")
+    if best_worst:
+        lines.append(_md_table(
+            ["类型", "交易对", "开仓", "平仓", "收益率", "收益"],
+            [
+                ["最好", best_worst["best"].get("pair"), best_worst["best"].get("open_date"), best_worst["best"].get("close_date"),
+                 pct_value(best_worst["best"].get("profit_ratio")), number_value(best_worst["best"].get("profit_abs"))],
+                ["最差", best_worst["worst"].get("pair"), best_worst["worst"].get("open_date"), best_worst["worst"].get("close_date"),
+                 pct_value(best_worst["worst"].get("profit_ratio")), number_value(best_worst["worst"].get("profit_abs"))],
+            ],
+        ))
+    else:
+        lines.append("_暂无数据_")
+    path = _export_write("backtest", record_id, "\n".join(lines) + "\n")
+    return {"ok": True, "file": str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")}
+
+
+def export_simulation_report(record_id: str) -> dict[str, Any]:
+    detail = simulation_detail(record_id)
+    record = detail.get("record", {})
+    metrics = record.get("metrics", {})
+    capital = record.get("capital", {})
+    currency = capital.get("stake_currency", "USDT")
+    lines = [
+        f"# 模拟交易报告 - {record.get('strategy', '--')}",
+        "",
+        f"- 生成时间: {datetime.now().isoformat(timespec='seconds')}",
+        f"- 交易对: {record.get('pair', '--')}",
+        f"- 开始时间: {record.get('started_at', '--')}",
+        f"- 结束时间: {record.get('ended_at', '--')}",
+        "",
+        "## 会话指标",
+        "",
+        _md_table(
+            ["指标", "数值"],
+            [
+                ["会话收益", f"{number_value(metrics.get('profit_abs'))} {currency}"],
+                ["收益率", pct_value(metrics.get("profit_ratio"))],
+                ["交易次数", metrics.get("trade_count") if metrics.get("trade_count") is not None else "暂无数据"],
+                ["运行时长(秒)", metrics.get("duration_seconds") if metrics.get("duration_seconds") is not None else "暂无数据"],
+                ["单笔投入", f"{number_value(capital.get('stake_amount'))} {currency}"],
+                ["模拟钱包", f"{number_value(capital.get('dry_run_wallet'))} {currency}"],
+            ],
+        ),
+    ]
+    path = _export_write("simulation", record_id, "\n".join(lines) + "\n")
+    return {"ok": True, "file": str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")}
+
+
+def export_experiment_report(experiment_id: str) -> dict[str, Any]:
+    items = load_experiments()
+    record = next((item for item in items if item.get("id") == experiment_id), None)
+    if not record:
+        raise ValueError("没有找到指定实验记录")
+    lines = [
+        f"# 实验记录 - {record.get('name', '--')}",
+        "",
+        f"- 生成时间: {datetime.now().isoformat(timespec='seconds')}",
+        f"- 策略: {record.get('strategy') or '暂无数据'}",
+        f"- 数据集: {record.get('dataset_name') or record.get('dataset_id') or '暂无数据'}",
+        f"- 交易对: {record.get('pair') or '暂无数据'}",
+        f"- 时间范围: {record.get('start') or '--'} 至 {record.get('end') or '--'}",
+        f"- 是否进入模拟交易: {'是' if record.get('promoted_to_simulation') else '否'}",
+        "",
+        "## 实验目的",
+        "",
+        record.get("purpose") or "_暂无数据_",
+        "",
+        "## 参数摘要",
+        "",
+        record.get("params_summary") or "_暂无数据_",
+        "",
+        "## 结果摘要",
+        "",
+        record.get("result_summary") or "_暂无数据_",
+        "",
+        "## 结论",
+        "",
+        record.get("conclusion") or "_暂无数据_",
+    ]
+    path = _export_write("experiment", experiment_id, "\n".join(lines) + "\n")
+    return {"ok": True, "file": str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")}
+
+
 class ConsoleHandler(SimpleHTTPRequestHandler):
     server_version = "aiquant-console/0.1"
 
@@ -2537,6 +3227,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/local-config":
                 self.send_json(summarize_local_config(load_runtime_config()["config"]))
                 return
+            if parsed.path == "/api/data/quality-detail":
+                query = parse_qs(parsed.query)
+                self.send_json(dataset_quality_detail(query.get("dataset_id", [""])[0]))
+                return
+            if parsed.path == "/api/experiments":
+                self.send_json({"items": load_experiments()})
+                return
             return super().do_GET()
         except Exception as exc:  # noqa: BLE001
             self.send_json({"ok": False, "error": str(exc)}, status=500)
@@ -2551,6 +3248,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/backtests/run":
                 payload = read_request_json(self)
                 self.send_json(run_backtest(payload))
+                return
+            if parsed.path == "/api/backtests/batch-run":
+                payload = read_request_json(self)
+                self.send_json(run_batch_backtest(payload))
                 return
             if parsed.path == "/api/hyperopt/run":
                 payload = read_request_json(self)
@@ -2606,6 +3307,30 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/strategy-versions/export":
                 payload = read_request_json(self)
                 self.send_json(export_strategy_version_to_strategy(payload))
+                return
+            if parsed.path == "/api/experiments/create":
+                payload = read_request_json(self)
+                self.send_json(create_experiment(payload))
+                return
+            if parsed.path == "/api/experiments/update":
+                payload = read_request_json(self)
+                self.send_json(update_experiment(payload))
+                return
+            if parsed.path == "/api/experiments/delete":
+                payload = read_request_json(self)
+                self.send_json(delete_experiment(str(payload.get("id", ""))))
+                return
+            if parsed.path == "/api/reports/export/backtest":
+                payload = read_request_json(self)
+                self.send_json(export_backtest_report(str(payload.get("id", ""))))
+                return
+            if parsed.path == "/api/reports/export/simulation":
+                payload = read_request_json(self)
+                self.send_json(export_simulation_report(str(payload.get("id", ""))))
+                return
+            if parsed.path == "/api/reports/export/experiment":
+                payload = read_request_json(self)
+                self.send_json(export_experiment_report(str(payload.get("id", ""))))
                 return
             match = re.fullmatch(r"/api/control/(start|stop|stopentry|reload|globalstop)", parsed.path)
             if not match:

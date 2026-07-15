@@ -27,6 +27,12 @@ const state = {
   backtestRunning: false,
   hyperoptRunning: false,
   view: "dashboard",
+  experiments: [],
+  editingExperimentId: null,
+  batchRanges: [],
+  selectedQualityDatasetId: null,
+  qualityDetail: null,
+  reportTab: "backtest",
 };
 
 const viewMeta = {
@@ -269,7 +275,7 @@ function initNavigation() {
 async function refresh() {
   setLoading(true);
   try {
-    const [snapshot, backtests, hyperopts, strategyVersions, strategies, dataInventory, watchlist, simulation] = await Promise.all([
+    const [snapshot, backtests, hyperopts, strategyVersions, strategies, dataInventory, watchlist, simulation, experiments] = await Promise.all([
       getJSON("/api/snapshot"),
       getJSON("/api/backtests"),
       getJSON("/api/hyperopts"),
@@ -278,6 +284,7 @@ async function refresh() {
       getJSON("/api/data-inventory"),
       getJSON("/api/watchlist"),
       getJSON("/api/simulation"),
+      getJSON("/api/experiments"),
     ]);
     state.snapshot = snapshot;
     state.backtests = backtests.items || [];
@@ -286,6 +293,7 @@ async function refresh() {
     state.simulation = simulation || { active: null, metrics: {}, history: [] };
     state.strategies = strategies.items || [];
     state.strategyState = strategies.state || {};
+    state.experiments = experiments.items || [];
     if (!state.selectedStrategy || !strategyByName(state.selectedStrategy)) {
       state.selectedStrategy =
         state.strategyState.applied_strategy ||
@@ -311,6 +319,8 @@ async function refresh() {
     renderDataInventory(state.dataInventory, snapshot.local_config || {});
     fillBacktestDatasetSelect(state.dataInventory);
     fillHyperoptDatasetSelect(state.dataInventory);
+    fillBatchBacktestControls();
+    fillExperimentFormSelects();
     fillSimulationControls();
     fillLiveControls();
     renderWatchlist(state.watchlist);
@@ -318,6 +328,8 @@ async function refresh() {
     renderSimulation(state.simulation, snapshot);
     renderLive(snapshot);
     renderHyperopts(state.hyperopts);
+    renderExperiments(state.experiments);
+    renderReportTabs();
     await loadMarketData();
     if (state.view === "simulation" || state.simulation.active) {
       await loadSimulationMarketData();
@@ -1360,6 +1372,161 @@ function renderStrategyVersions(items) {
   }
 }
 
+function fillExperimentFormSelects() {
+  const strategySelect = $("experimentStrategySelect");
+  if (strategySelect) {
+    const previous = strategySelect.value;
+    strategySelect.innerHTML = "";
+    const usable = state.strategies.filter((entry) => !entry.disabled);
+    for (const item of usable) {
+      const name = item.class_name || item.name;
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      option.selected = name === (previous || state.selectedStrategy);
+      strategySelect.appendChild(option);
+    }
+  }
+  const datasetSelect = $("experimentDatasetSelect");
+  if (datasetSelect) {
+    const previous = datasetSelect.value;
+    datasetSelect.innerHTML = "";
+    for (const item of state.dataInventory) {
+      const option = document.createElement("option");
+      option.value = item.dataset_id;
+      option.textContent = item.name || `${item.pair} ${item.timeframe}`;
+      option.selected = item.dataset_id === previous;
+      datasetSelect.appendChild(option);
+    }
+  }
+}
+
+function openExperimentForm(experimentId = null) {
+  const form = $("experimentForm");
+  if (!form) return;
+  form.classList.remove("hidden");
+  fillExperimentFormSelects();
+  state.editingExperimentId = experimentId || null;
+  const record = experimentId ? state.experiments.find((item) => item.id === experimentId) : null;
+  $("experimentName").value = record?.name || "";
+  $("experimentPurpose").value = record?.purpose || "";
+  if (record?.strategy) $("experimentStrategySelect").value = record.strategy;
+  if (record?.dataset_id) $("experimentDatasetSelect").value = record.dataset_id;
+  $("experimentStart").value = record?.start || "";
+  $("experimentEnd").value = record?.end || "";
+  $("experimentParams").value = record?.params_summary || "";
+  $("experimentResult").value = record?.result_summary || "";
+  $("experimentConclusion").value = record?.conclusion || "";
+  $("experimentPromoted").checked = Boolean(record?.promoted_to_simulation);
+}
+
+function closeExperimentForm() {
+  const form = $("experimentForm");
+  if (form) form.classList.add("hidden");
+  state.editingExperimentId = null;
+}
+
+async function saveExperimentForm() {
+  const name = $("experimentName").value.trim();
+  if (!name) {
+    toast("实验名称不能为空");
+    return;
+  }
+  const datasetSelect = $("experimentDatasetSelect");
+  const dataset = state.dataInventory.find((item) => item.dataset_id === datasetSelect?.value);
+  const payload = {
+    name,
+    purpose: $("experimentPurpose").value.trim(),
+    strategy: $("experimentStrategySelect")?.value || "",
+    dataset_id: datasetSelect?.value || "",
+    dataset_name: dataset?.name || "",
+    pair: dataset?.pair || "",
+    start: $("experimentStart").value,
+    end: $("experimentEnd").value,
+    params_summary: $("experimentParams").value.trim(),
+    result_summary: $("experimentResult").value.trim(),
+    conclusion: $("experimentConclusion").value.trim(),
+    promoted_to_simulation: $("experimentPromoted").checked,
+  };
+  try {
+    if (state.editingExperimentId) {
+      await postJSON("/api/experiments/update", { id: state.editingExperimentId, ...payload });
+      toast("实验记录已更新");
+    } else {
+      await postJSON("/api/experiments/create", payload);
+      toast("实验记录已保存");
+    }
+    closeExperimentForm();
+    const experiments = await getJSON("/api/experiments");
+    state.experiments = experiments.items || [];
+    renderExperiments(state.experiments);
+    renderReportExperimentList(state.experiments);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteExperimentRecord(id) {
+  if (!id) return;
+  if (!window.confirm("确定删除这条实验记录吗？")) return;
+  try {
+    await postJSON("/api/experiments/delete", { id });
+    const experiments = await getJSON("/api/experiments");
+    state.experiments = experiments.items || [];
+    renderExperiments(state.experiments);
+    renderReportExperimentList(state.experiments);
+    toast("实验记录已删除");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function togglePromoteExperiment(id, currentValue) {
+  if (!id) return;
+  try {
+    await postJSON("/api/experiments/update", { id, promoted_to_simulation: !currentValue });
+    const experiments = await getJSON("/api/experiments");
+    state.experiments = experiments.items || [];
+    renderExperiments(state.experiments);
+    renderReportExperimentList(state.experiments);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function renderExperiments(items) {
+  setText("experimentCountBadge", `${items.length} 条`);
+  const box = $("experimentList");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!items.length) {
+    box.innerHTML = `<div class="empty-card">暂无实验记录。运行回测或参数优化后，可以新建一条实验记录保存目的、结果和结论。</div>`;
+    return;
+  }
+  for (const item of items) {
+    const subtitle = `${item.strategy || "--"} · ${item.dataset_name || item.dataset_id || "--"} · ${item.start || "--"} 至 ${item.end || "--"}`;
+    const card = document.createElement("article");
+    card.className = "library-card experiment-card";
+    card.innerHTML = `
+      <div>
+        <div class="card-title-row">
+          <h4>${escapeHTML(item.name)}</h4>
+          <span>${item.promoted_to_simulation ? "已进入模拟交易" : "未进入模拟交易"}</span>
+        </div>
+        <p>${escapeHTML(subtitle)}</p>
+        <p class="panel-note">目的：${escapeHTML(item.purpose || "暂无数据")}</p>
+        <p class="panel-note">结论：${escapeHTML(item.conclusion || "暂无数据")}</p>
+      </div>
+      <div class="detail-actions">
+        <button class="button secondary tiny" type="button" data-experiment-edit="${escapeHTML(item.id)}">查看/编辑</button>
+        <button class="button warn tiny" type="button" data-experiment-promote="${escapeHTML(item.id)}" data-promote-value="${item.promoted_to_simulation ? "true" : "false"}">${item.promoted_to_simulation ? "取消模拟标记" : "标记为已模拟"}</button>
+        <button class="button danger tiny" type="button" data-experiment-delete="${escapeHTML(item.id)}">删除</button>
+      </div>
+    `;
+    box.appendChild(card);
+  }
+}
+
 function fillSimulationControls() {
   const active = state.simulation?.active;
   const config = state.snapshot?.local_config || {};
@@ -1569,6 +1736,150 @@ function syncHyperoptDatasetFields(dataset) {
   }
 }
 
+function fillBatchBacktestControls() {
+  const strategySelect = $("batchStrategySelect");
+  if (strategySelect) {
+    const previouslySelected = new Set(Array.from(strategySelect.selectedOptions || []).map((opt) => opt.value));
+    strategySelect.innerHTML = "";
+    const usable = state.strategies.filter((entry) => !entry.disabled);
+    for (const item of usable) {
+      const name = item.class_name || item.name;
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      option.selected = previouslySelected.size ? previouslySelected.has(name) : name === state.selectedStrategy;
+      strategySelect.appendChild(option);
+    }
+  }
+  const datasetSelect = $("batchDatasetSelect");
+  if (datasetSelect) {
+    const previouslySelected = new Set(Array.from(datasetSelect.selectedOptions || []).map((opt) => opt.value));
+    datasetSelect.innerHTML = "";
+    const usable = state.dataInventory.filter((item) => item.status === "可用");
+    for (const item of usable) {
+      const option = document.createElement("option");
+      option.value = item.dataset_id;
+      option.textContent = item.name || `${item.pair} ${item.timeframe}`;
+      option.selected = previouslySelected.has(item.dataset_id);
+      datasetSelect.appendChild(option);
+    }
+  }
+  fillStrategyVersionSelect("batchVersionSelect", $("batchStrategySelect")?.value || state.selectedStrategy, "");
+  if (!state.batchRanges.length) {
+    const firstDataset = state.dataInventory.find((item) => item.status === "可用");
+    state.batchRanges = [{ start: firstDataset?.start || "", end: firstDataset?.end || "" }];
+  }
+  renderBatchRanges();
+}
+
+function renderBatchRanges() {
+  const box = $("batchRanges");
+  if (!box) return;
+  box.innerHTML = "";
+  state.batchRanges.forEach((range, index) => {
+    const row = document.createElement("div");
+    row.className = "batch-range-row";
+    row.innerHTML = `
+      <input type="date" class="batch-range-start" value="${escapeHTML(range.start || "")}">
+      <span>至</span>
+      <input type="date" class="batch-range-end" value="${escapeHTML(range.end || "")}">
+      <button class="button secondary tiny" type="button" data-remove-range="${index}">移除</button>
+    `;
+    row.querySelector(".batch-range-start").addEventListener("change", (event) => {
+      state.batchRanges[index].start = event.target.value;
+    });
+    row.querySelector(".batch-range-end").addEventListener("change", (event) => {
+      state.batchRanges[index].end = event.target.value;
+    });
+    box.appendChild(row);
+  });
+}
+
+function addBatchRange() {
+  state.batchRanges.push({ start: "", end: "" });
+  renderBatchRanges();
+}
+
+function selectedMultiValues(id) {
+  const select = $(id);
+  if (!select) return [];
+  return Array.from(select.selectedOptions || []).map((opt) => opt.value).filter(Boolean);
+}
+
+function renderBatchCompareRows(records, errors) {
+  const body = $("batchCompareRows");
+  if (!body) return;
+  body.innerHTML = "";
+  if (!records.length && !errors.length) {
+    body.innerHTML = `<tr><td colspan="9">暂无批量回测结果</td></tr>`;
+    return;
+  }
+  for (const record of records) {
+    const m = record.metrics || {};
+    const req = record.requested || {};
+    body.insertAdjacentHTML(
+      "beforeend",
+      `<tr>
+        <td>${escapeHTML(m.strategy || req.strategy || "--")}</td>
+        <td>${escapeHTML(req.pair || "--")}</td>
+        <td>${escapeHTML(req.timeframe || "--")}</td>
+        <td>${escapeHTML(req.start || "--")} ~ ${escapeHTML(req.end || "--")}</td>
+        <td>${escapeHTML(m.trades ?? "--")}</td>
+        <td>${escapeHTML(m.profit ?? "--")}</td>
+        <td>${escapeHTML(m.drawdown ?? "--")}</td>
+        <td>${escapeHTML(m.win_rate ?? "--")}</td>
+        <td>${escapeHTML(m.profit_factor ?? "--")}</td>
+      </tr>`,
+    );
+  }
+  for (const err of errors) {
+    body.insertAdjacentHTML(
+      "beforeend",
+      `<tr class="danger-row">
+        <td>${escapeHTML(err.strategy || "--")}</td>
+        <td colspan="7">失败：${escapeHTML(err.error || "未知错误")}（数据集 ${escapeHTML(err.dataset_name || err.dataset_id || "--")} · ${escapeHTML(err.start || "--")}~${escapeHTML(err.end || "--")}）</td>
+        <td></td>
+      </tr>`,
+    );
+  }
+}
+
+async function runBatchBacktest() {
+  const strategies = selectedMultiValues("batchStrategySelect");
+  const datasetIds = selectedMultiValues("batchDatasetSelect");
+  const strategyVersionId = $("batchVersionSelect")?.value || "";
+  const ranges = state.batchRanges.filter((range) => range.start && range.end);
+  if (!strategies.length || !datasetIds.length || !ranges.length) {
+    toast("请至少选择一个策略、一个数据集，并填写至少一个时间段");
+    return;
+  }
+  const total = strategies.length * datasetIds.length * ranges.length;
+  if (total > 20) {
+    toast(`组合数 ${total} 超过上限 20，请减少选择数量`);
+    return;
+  }
+  const button = $("runBatchBacktestBtn");
+  if (button) button.disabled = true;
+  setText("batchBacktestStatus", `正在运行 ${total} 组批量回测，请稍等...`);
+  try {
+    const result = await postJSON("/api/backtests/batch-run", {
+      strategies,
+      dataset_ids: datasetIds,
+      strategy_version_id: strategyVersionId,
+      ranges,
+    });
+    setText("batchBacktestStatus", `批量回测完成：成功 ${result.succeeded}/${result.total}，失败 ${result.failed}`);
+    renderBatchCompareRows(result.records || [], result.errors || []);
+    toast("批量回测完成");
+    await refresh();
+  } catch (error) {
+    setText("batchBacktestStatus", error.message);
+    toast(error.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function strategyByName(name) {
   return state.strategies.find((item) => (item.class_name || item.name) === name);
 }
@@ -1649,6 +1960,7 @@ function renderDataInventory(items, config) {
         <td>${escapeHTML(item.modified || "--")}</td>
         <td>
           <div class="data-row-actions">
+            <button class="mini-button" type="button" data-data-action="detail" data-dataset-id="${datasetId}">详情</button>
             <button class="mini-button" type="button" data-data-action="repair" data-dataset-id="${datasetId}">修复</button>
             <button class="mini-button" type="button" data-data-action="rename" data-dataset-id="${datasetId}" data-current-name="${escapeHTML(item.name || "")}">重命名</button>
             <button class="mini-button danger" type="button" data-data-action="delete" data-dataset-id="${datasetId}">删除</button>
@@ -1657,6 +1969,133 @@ function renderDataInventory(items, config) {
       </tr>`,
     );
   }
+}
+
+async function loadDatasetQualityDetail(datasetId) {
+  state.selectedQualityDatasetId = datasetId;
+  const panel = $("dataQualityPanel");
+  const box = $("dataQualityDetail");
+  const badge = $("dataQualityBadge");
+  if (panel) panel.classList.remove("hidden");
+  if (box) box.innerHTML = "正在读取数据质量详情...";
+  if (badge) {
+    badge.textContent = "加载中";
+    badge.className = "badge warn";
+  }
+  try {
+    const detail = await getJSON(`/api/data/quality-detail?dataset_id=${encodeURIComponent(datasetId)}`);
+    state.qualityDetail = detail;
+    renderDatasetQualityDetail(detail);
+  } catch (error) {
+    if (box) box.innerHTML = escapeHTML(error.message);
+    if (badge) {
+      badge.textContent = "读取失败";
+      badge.className = "badge danger";
+    }
+  }
+}
+
+function renderCandleRows(candles) {
+  if (!candles || !candles.length) return `<tr><td colspan="6">暂无数据</td></tr>`;
+  return candles
+    .map(
+      (c) => `<tr>
+        <td>${escapeHTML(c.date || "--")}</td>
+        <td>${detailNumber(c.open)}</td>
+        <td>${detailNumber(c.high)}</td>
+        <td>${detailNumber(c.low)}</td>
+        <td>${detailNumber(c.close)}</td>
+        <td>${detailNumber(c.volume, 2)}</td>
+      </tr>`,
+    )
+    .join("");
+}
+
+function renderDatasetQualityDetail(detail) {
+  const box = $("dataQualityDetail");
+  const badge = $("dataQualityBadge");
+  if (!box) return;
+  const dataset = detail.dataset || {};
+  if (badge) {
+    badge.textContent = dataset.name || "详情";
+    badge.className = "badge safe";
+  }
+  if (detail.parse_error) {
+    box.innerHTML = `<div class="backtest-detail-empty">${escapeHTML(detail.parse_error)}</div>`;
+    return;
+  }
+  const suitable = detail.suitable_for_backtest;
+  const suitableBadge = suitable === true
+    ? `<span class="badge safe">适合回测</span>`
+    : suitable === false
+      ? `<span class="badge warn">需注意</span>`
+      : `<span class="badge neutral">暂无数据</span>`;
+  const reasons = (detail.suitability_reasons || []).length
+    ? `<ul class="quality-reason-list">${detail.suitability_reasons.map((r) => `<li>${escapeHTML(r)}</li>`).join("")}</ul>`
+    : `<p class="panel-note">暂无数据</p>`;
+  const gapRows = (detail.gaps || []).length
+    ? detail.gaps.map((g) => `<tr><td>${escapeHTML(g.from || "--")}</td><td>${escapeHTML(g.to || "--")}</td><td>${escapeHTML(g.missing_candles ?? "--")}</td></tr>`).join("")
+    : `<tr><td colspan="3">暂无数据</td></tr>`;
+  const priceAnomalyRows = (detail.price_anomalies || []).length
+    ? detail.price_anomalies.map((a) => `<tr><td>${escapeHTML(a.date || "--")}</td><td>${detailNumber(a.open)}</td><td>${detailNumber(a.high)}</td><td>${detailNumber(a.low)}</td><td>${detailNumber(a.close)}</td><td>${escapeHTML(a.reason || "--")}</td></tr>`).join("")
+    : `<tr><td colspan="6">暂无数据</td></tr>`;
+  const volumeAnomalyRows = (detail.volume_anomalies || []).length
+    ? detail.volume_anomalies.map((a) => `<tr><td>${escapeHTML(a.date || "--")}</td><td>${detailNumber(a.volume, 2)}</td><td>${escapeHTML(a.reason || "--")}</td></tr>`).join("")
+    : `<tr><td colspan="3">暂无数据</td></tr>`;
+
+  box.className = "backtest-detail";
+  box.innerHTML = `
+    <section class="backtest-detail-hero">
+      <div>
+        <p class="eyebrow">数据集</p>
+        <h4>${escapeHTML(dataset.name || "--")}</h4>
+        <span>${escapeHTML(dataset.pair || "--")} · ${escapeHTML(dataset.timeframe || "--")} · ${escapeHTML(dataset.start || "--")} 至 ${escapeHTML(dataset.end || "--")}</span>
+      </div>
+      <div class="detail-source">${suitableBadge}</div>
+    </section>
+    <section class="detail-metrics">
+      ${backtestMetricCard("K线数", dataset.candles ?? "暂无数据")}
+      ${backtestMetricCard("完整度", dataset.completeness != null ? fmtRatioPercent(dataset.completeness) : "暂无数据")}
+      ${backtestMetricCard("缺口数", detail.gap_total ?? "暂无数据")}
+      ${backtestMetricCard("价格异常", detail.price_anomaly_total ?? "暂无数据")}
+      ${backtestMetricCard("成交量异常", detail.volume_anomaly_total ?? "暂无数据")}
+    </section>
+    <section class="detail-table-card">
+      <h4>是否适合回测</h4>
+      ${reasons}
+    </section>
+    <section class="detail-grid-two">
+      <div class="detail-table-card">
+        <h4>首部K线</h4>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>开</th><th>高</th><th>低</th><th>收</th><th>量</th></tr></thead><tbody>${renderCandleRows(detail.first_candles)}</tbody></table></div>
+      </div>
+      <div class="detail-table-card">
+        <h4>尾部K线</h4>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>开</th><th>高</th><th>低</th><th>收</th><th>量</th></tr></thead><tbody>${renderCandleRows(detail.last_candles)}</tbody></table></div>
+      </div>
+    </section>
+    <section class="detail-table-card">
+      <h4>缺口列表${detail.gap_total > (detail.gaps || []).length ? `（仅显示前 ${(detail.gaps || []).length} 条，共 ${detail.gap_total} 条）` : ""}</h4>
+      <div class="table-wrap"><table><thead><tr><th>缺口起点</th><th>缺口终点</th><th>缺失K线数</th></tr></thead><tbody>${gapRows}</tbody></table></div>
+    </section>
+    <section class="detail-grid-two">
+      <div class="detail-table-card">
+        <h4>异常价格${detail.price_anomaly_total > (detail.price_anomalies || []).length ? `（仅显示前 ${(detail.price_anomalies || []).length} 条）` : ""}</h4>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>开</th><th>高</th><th>低</th><th>收</th><th>原因</th></tr></thead><tbody>${priceAnomalyRows}</tbody></table></div>
+      </div>
+      <div class="detail-table-card">
+        <h4>异常成交量${detail.volume_anomaly_total > (detail.volume_anomalies || []).length ? `（仅显示前 ${(detail.volume_anomalies || []).length} 条）` : ""}</h4>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>量</th><th>原因</th></tr></thead><tbody>${volumeAnomalyRows}</tbody></table></div>
+      </div>
+    </section>
+  `;
+}
+
+function closeDatasetQualityDetail() {
+  state.selectedQualityDatasetId = null;
+  state.qualityDetail = null;
+  const panel = $("dataQualityPanel");
+  if (panel) panel.classList.add("hidden");
 }
 
 function setDataActionLog(message, visible = true) {
@@ -2136,9 +2575,137 @@ function drawKlineOnCanvas(canvasId, emptyId, candles, markers = []) {
 
 function renderBacktests(items) {
   renderBacktestCards("backtestList", items, true, true);
-  renderBacktestCards("reportArchiveList", items, false, false);
+  renderReportBacktestList(items);
   if (!state.backtestDetail) {
     renderBacktestDetail(null);
+  }
+}
+
+function renderReportBacktestList(items) {
+  const box = $("reportArchiveList");
+  if (!box) return;
+  box.innerHTML = "";
+  const exportable = items.filter((item) => item.id && (item.source || item.file));
+  if (!exportable.length) {
+    box.innerHTML = `<div class="report-card">暂无回测报告</div>`;
+    return;
+  }
+  for (const item of exportable) {
+    const m = item.metrics || {};
+    const req = item.requested || {};
+    const subtitle = req.pair ? `${req.pair} · ${req.timeframe || "--"} · ${req.start || "--"} 至 ${req.end || "--"}` : (item.modified || item.created_at || "");
+    box.insertAdjacentHTML(
+      "beforeend",
+      `<div class="report-card">
+        <div class="report-card-head">
+          <h4>${escapeHTML(m.strategy || item.name)}</h4>
+          <div class="report-card-actions">
+            <button class="button secondary tiny" type="button" data-export-kind="backtest" data-export-id="${escapeHTML(item.id)}">导出 Markdown</button>
+          </div>
+        </div>
+        <p class="report-subtitle">${escapeHTML(subtitle)}</p>
+        <div class="report-metrics two">
+          <div><span>交易数</span><strong>${escapeHTML(m.trades ?? "--")}</strong></div>
+          <div><span>收益</span><strong>${escapeHTML(m.profit ?? "--")}</strong></div>
+          <div><span>回撤</span><strong>${escapeHTML(m.drawdown ?? "--")}</strong></div>
+          <div><span>胜率</span><strong>${escapeHTML(m.win_rate ?? "--")}</strong></div>
+        </div>
+      </div>`,
+    );
+  }
+}
+
+function renderReportSimulationList(items) {
+  const box = $("reportSimulationList");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!items.length) {
+    box.innerHTML = `<div class="report-card">暂无模拟交易报告</div>`;
+    return;
+  }
+  for (const item of items) {
+    const metrics = item.metrics || {};
+    const subtitle = `${item.pair || "--"} · ${item.started_at || "--"} 至 ${item.ended_at || "--"}`;
+    box.insertAdjacentHTML(
+      "beforeend",
+      `<div class="report-card">
+        <div class="report-card-head">
+          <h4>${escapeHTML(item.strategy || "--")}</h4>
+          <div class="report-card-actions">
+            <button class="button secondary tiny" type="button" data-export-kind="simulation" data-export-id="${escapeHTML(item.id)}">导出 Markdown</button>
+          </div>
+        </div>
+        <p class="report-subtitle">${escapeHTML(subtitle)}</p>
+        <div class="report-metrics two">
+          <div><span>交易数</span><strong>${escapeHTML(metrics.trade_count ?? 0)}</strong></div>
+          <div><span>收益</span><strong>${fmtNumber(metrics.profit_abs, 4)} USDT</strong></div>
+        </div>
+      </div>`,
+    );
+  }
+}
+
+function renderReportExperimentList(items) {
+  const box = $("reportExperimentList");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!items.length) {
+    box.innerHTML = `<div class="report-card">暂无实验记录</div>`;
+    return;
+  }
+  for (const item of items) {
+    const subtitle = `${item.strategy || "--"} · ${item.pair || "--"} · ${item.start || "--"} 至 ${item.end || "--"}`;
+    box.insertAdjacentHTML(
+      "beforeend",
+      `<div class="report-card">
+        <div class="report-card-head">
+          <h4>${escapeHTML(item.name || "--")}</h4>
+          <div class="report-card-actions">
+            <button class="button secondary tiny" type="button" data-export-kind="experiment" data-export-id="${escapeHTML(item.id)}">导出 Markdown</button>
+          </div>
+        </div>
+        <p class="report-subtitle">${escapeHTML(subtitle)}</p>
+        <p class="report-subtitle">${escapeHTML(item.conclusion || "暂无结论")}</p>
+      </div>`,
+    );
+  }
+}
+
+function renderReportTabs() {
+  renderReportBacktestList(state.backtests);
+  renderReportSimulationList(state.simulation?.history || []);
+  renderReportExperimentList(state.experiments);
+}
+
+function switchReportTab(tab) {
+  state.reportTab = tab;
+  document.querySelectorAll(".report-tab").forEach((node) => {
+    node.classList.toggle("active", node.dataset.reportTab === tab);
+  });
+  document.querySelectorAll(".report-tab-panel").forEach((node) => {
+    node.classList.toggle("active", node.id === `reportTab-${tab}`);
+  });
+}
+
+async function exportReport(kind, id) {
+  if (!id) return;
+  const endpoints = {
+    backtest: "/api/reports/export/backtest",
+    simulation: "/api/reports/export/simulation",
+    experiment: "/api/reports/export/experiment",
+  };
+  const endpoint = endpoints[kind];
+  if (!endpoint) return;
+  try {
+    const result = await postJSON(endpoint, { id });
+    const hint = $("reportExportHint");
+    if (hint) {
+      hint.textContent = `已导出：${result.file}`;
+      hint.classList.remove("hidden");
+    }
+    toast(`已导出 ${result.file}`);
+  } catch (error) {
+    toast(error.message);
   }
 }
 
@@ -2368,6 +2935,7 @@ function renderBacktestDetail(detail) {
       ${renderBacktestStatTable("交易对表现", detail.pair_stats || [])}
       ${renderBacktestStatTable("退出原因", detail.exit_reasons || [])}
     </section>
+    ${renderAdvancedMetrics(detail.advanced_metrics || {})}
     <section class="detail-trades">
       <div class="panel-head compact-head">
         <h4>交易明细</h4>
@@ -2377,6 +2945,80 @@ function renderBacktestDetail(detail) {
     </section>
   `;
   drawBacktestEquityCurve(detail.equity_curve || []);
+}
+
+function renderAdvancedMetrics(advanced) {
+  const drawdown = advanced.max_drawdown_period;
+  const monthly = advanced.monthly_returns;
+  const distribution = advanced.profit_distribution;
+  const bestWorst = advanced.best_worst_trade;
+  const monthlyRows = (monthly || [])
+    .map((row) => `
+      <tr>
+        <td>${escapeHTML(row.month)}</td>
+        <td>${detailNumber(row.start_equity, 2)}</td>
+        <td>${detailNumber(row.end_equity, 2)}</td>
+        <td class="${classifyNumber(row.profit_abs)}">${detailNumber(row.profit_abs, 4)}</td>
+      </tr>`)
+    .join("");
+  const distributionRows = (distribution || [])
+    .map((row) => `<tr><td>${escapeHTML(row.bucket)}</td><td>${escapeHTML(row.count)}</td></tr>`)
+    .join("");
+  const bestWorstBlock = bestWorst
+    ? `<table>
+        <thead><tr><th>类型</th><th>交易对</th><th>开仓</th><th>平仓</th><th>收益率</th><th>收益</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>最好</td><td>${escapeHTML(bestWorst.best.pair || "--")}</td><td>${escapeHTML(bestWorst.best.open_date || "--")}</td>
+            <td>${escapeHTML(bestWorst.best.close_date || "--")}</td>
+            <td class="${classifyNumber(bestWorst.best.profit_ratio)}">${detailPercent(bestWorst.best.profit_ratio)}</td>
+            <td class="${classifyNumber(bestWorst.best.profit_abs)}">${detailNumber(bestWorst.best.profit_abs, 4)}</td>
+          </tr>
+          <tr>
+            <td>最差</td><td>${escapeHTML(bestWorst.worst.pair || "--")}</td><td>${escapeHTML(bestWorst.worst.open_date || "--")}</td>
+            <td>${escapeHTML(bestWorst.worst.close_date || "--")}</td>
+            <td class="${classifyNumber(bestWorst.worst.profit_ratio)}">${detailPercent(bestWorst.worst.profit_ratio)}</td>
+            <td class="${classifyNumber(bestWorst.worst.profit_abs)}">${detailNumber(bestWorst.worst.profit_abs, 4)}</td>
+          </tr>
+        </tbody>
+      </table>`
+    : `<p class="panel-note">暂无数据</p>`;
+  return `
+    <section class="detail-table-card advanced-metrics-block">
+      <h4>复盘增强指标</h4>
+      <div class="detail-metrics compact-metrics">
+        ${backtestMetricCard(
+          "最大回撤区间",
+          drawdown ? `${drawdown.peak_time} → ${drawdown.trough_time}（${detailPercent(drawdown.depth_pct)}）` : "暂无数据",
+        )}
+        ${backtestMetricCard("最长连续亏损笔数", advanced.max_consecutive_losses ?? "暂无数据")}
+        ${backtestMetricCard("平均持仓时长(分钟)", advanced.avg_holding_minutes ?? "暂无数据")}
+      </div>
+      <div class="detail-grid-two">
+        <div class="detail-table-card">
+          <h4>月度收益</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>月份</th><th>月初权益</th><th>月末权益</th><th>月收益</th></tr></thead>
+              <tbody>${monthlyRows || `<tr><td colspan="4">暂无数据</td></tr>`}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="detail-table-card">
+          <h4>收益分布</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>收益率区间</th><th>笔数</th></tr></thead>
+              <tbody>${distributionRows || `<tr><td colspan="2">暂无数据</td></tr>`}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="detail-table-card">
+        <h4>最好/最差交易</h4>
+        <div class="table-wrap">${bestWorstBlock}</div>
+      </div>
+    </section>`;
 }
 
 function renderBacktestStatTable(title, rows) {
@@ -2974,9 +3616,43 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-data-action]");
   if (!button) return;
   const datasetId = button.dataset.datasetId;
+  if (button.dataset.dataAction === "detail") loadDatasetQualityDetail(datasetId);
   if (button.dataset.dataAction === "repair") repairDataset(datasetId);
   if (button.dataset.dataAction === "rename") renameDataset(datasetId, button.dataset.currentName);
   if (button.dataset.dataAction === "delete") deleteDataset(datasetId);
+});
+$("closeDataQualityBtn")?.addEventListener("click", closeDatasetQualityDetail);
+$("addBatchRangeBtn")?.addEventListener("click", addBatchRange);
+$("runBatchBacktestBtn")?.addEventListener("click", runBatchBacktest);
+$("batchStrategySelect")?.addEventListener("change", () => {
+  fillStrategyVersionSelect("batchVersionSelect", $("batchStrategySelect").value, "");
+});
+document.querySelectorAll("[data-report-tab]").forEach((node) => {
+  node.addEventListener("click", () => switchReportTab(node.dataset.reportTab));
+});
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-export-kind]");
+  if (!button) return;
+  exportReport(button.dataset.exportKind, button.dataset.exportId);
+});
+$("addExperimentBtn")?.addEventListener("click", () => openExperimentForm());
+$("cancelExperimentBtn")?.addEventListener("click", () => closeExperimentForm());
+$("saveExperimentBtn")?.addEventListener("click", saveExperimentForm);
+document.addEventListener("click", (event) => {
+  const editButton = event.target.closest("[data-experiment-edit]");
+  if (editButton) {
+    openExperimentForm(editButton.dataset.experimentEdit);
+    return;
+  }
+  const deleteButton = event.target.closest("[data-experiment-delete]");
+  if (deleteButton) {
+    deleteExperimentRecord(deleteButton.dataset.experimentDelete);
+    return;
+  }
+  const promoteButton = event.target.closest("[data-experiment-promote]");
+  if (promoteButton) {
+    togglePromoteExperiment(promoteButton.dataset.experimentPromote, promoteButton.dataset.promoteValue === "true");
+  }
 });
 $("simulationInterval").addEventListener("change", loadSimulationMarketData);
 $("simulationWindow").addEventListener("change", loadSimulationMarketData);

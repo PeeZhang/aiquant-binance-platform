@@ -1982,3 +1982,109 @@ td.negative {
     grid-template-columns: 1fr;
   }
 }
+
+/* 批量回测 */
+.batch-ranges {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.batch-range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-range-row input[type="date"] {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.batch-range-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+tr.danger-row td {
+  color: var(--red);
+  font-weight: 700;
+}
+
+/* 数据质量详情面板 */
+.data-quality-panel {
+  margin-top: 14px;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quality-reason-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--amber);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.compact-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.advanced-metrics-block {
+  display: grid;
+  gap: 14px;
+}
+
+/* 实验记录 */
+.experiment-panel .card-list {
+  margin-top: 12px;
+}
+
+.experiment-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.experiment-card .card-title-row span {
+  color: var(--teal);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+/* 报告归档 Tabs */
+.report-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.report-tab {
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-weight: 900;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+
+.report-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--teal);
+}
+
+.report-tab-panel {
+  display: none;
+}
+
+.report-tab-panel.active {
+  display: block;
+}

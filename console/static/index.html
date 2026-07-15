@@ -180,6 +180,17 @@
               </div>
             </article>
 
+            <article class="panel data-quality-panel hidden" id="dataQualityPanel">
+              <div class="panel-head">
+                <h3>数据质量详情</h3>
+                <div class="panel-actions">
+                  <span id="dataQualityBadge" class="badge neutral">--</span>
+                  <button id="closeDataQualityBtn" class="button secondary tiny" type="button">关闭</button>
+                </div>
+              </div>
+              <div id="dataQualityDetail" class="backtest-detail-empty">请选择一个数据集查看详情</div>
+            </article>
+
             <article class="panel">
               <div class="panel-head">
                 <h3>自选实时行情</h3>
@@ -327,6 +338,38 @@
             </div>
             <div id="strategyVersionList" class="version-list"></div>
           </article>
+
+          <article class="panel experiment-panel">
+            <div class="panel-head">
+              <div>
+                <h3>实验记录</h3>
+                <p class="panel-note">记录每次策略参数实验的目的、数据范围、结果和结论，便于回溯是否值得进入模拟交易。</p>
+              </div>
+              <div class="panel-actions">
+                <span id="experimentCountBadge" class="badge neutral">--</span>
+                <button id="addExperimentBtn" class="button secondary" type="button">新建实验记录</button>
+              </div>
+            </div>
+            <div id="experimentForm" class="builder hidden">
+              <div class="form-grid">
+                <label class="span-two">实验名称<input id="experimentName" placeholder="例如：SMA快慢线周期对比"></label>
+                <label class="span-two">实验目的<textarea id="experimentPurpose" rows="2" placeholder="这次实验想验证什么"></textarea></label>
+                <label>关联策略<select id="experimentStrategySelect"></select></label>
+                <label>关联数据集<select id="experimentDatasetSelect"></select></label>
+                <label>起始时间<input id="experimentStart" type="date"></label>
+                <label>结束时间<input id="experimentEnd" type="date"></label>
+                <label class="span-two">参数/策略版本摘要<textarea id="experimentParams" rows="2" placeholder="例如：fast=20 slow=100，或选择的策略版本名称"></textarea></label>
+                <label class="span-two">结果摘要<textarea id="experimentResult" rows="2" placeholder="回测/优化结果的关键数字"></textarea></label>
+                <label class="span-two">结论<textarea id="experimentConclusion" rows="2" placeholder="是否值得继续、进入模拟交易的原因"></textarea></label>
+                <label class="check"><span>已进入模拟交易</span><input id="experimentPromoted" type="checkbox"></label>
+              </div>
+              <div class="builder-actions">
+                <button id="saveExperimentBtn" class="button success" type="button">保存实验记录</button>
+                <button id="cancelExperimentBtn" class="button secondary" type="button">取消</button>
+              </div>
+            </div>
+            <div id="experimentList" class="card-list"></div>
+          </article>
         </section>
 
         <section class="view" id="view-backtest">
@@ -350,6 +393,42 @@
               </div>
               <p class="hint">回测只对所选数据集对应的单一交易对运行；策略文件只负责买卖条件，不负责决定交易哪个币。</p>
               <pre id="backtestStatus" class="mini-log">等待运行回测</pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>批量回测 / 多策略对比</h3>
+                  <p class="panel-note">同时勾选多个策略、多个数据集或多个时间段，会对全部组合逐一运行回测（上限 20 组）。</p>
+                </div>
+                <span class="badge safe">Freqtrade</span>
+              </div>
+              <div class="form-grid">
+                <label class="span-two">策略（可多选）
+                  <select id="batchStrategySelect" multiple size="4"></select>
+                </label>
+                <label class="span-two">数据集（可多选）
+                  <select id="batchDatasetSelect" multiple size="4"></select>
+                </label>
+                <label>策略版本<select id="batchVersionSelect"></select></label>
+              </div>
+              <div id="batchRanges" class="batch-ranges"></div>
+              <div class="builder-actions">
+                <button id="addBatchRangeBtn" class="button secondary" type="button">添加时间段</button>
+                <button id="runBatchBacktestBtn" class="button success" type="button">运行批量回测</button>
+              </div>
+              <pre id="batchBacktestStatus" class="mini-log">等待运行批量回测</pre>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>策略</th><th>交易对</th><th>周期</th><th>时间范围</th>
+                      <th>交易数</th><th>收益</th><th>回撤</th><th>胜率</th><th>Profit Factor</th>
+                    </tr>
+                  </thead>
+                  <tbody id="batchCompareRows"><tr><td colspan="9">暂无批量回测结果</td></tr></tbody>
+                </table>
+              </div>
             </article>
 
             <article class="panel">
@@ -900,24 +979,36 @@
         </section>
 
         <section class="view" id="view-reports">
-          <div class="layout-two">
-            <article class="panel">
-              <div class="panel-head">
-                <h3>报告归档</h3>
-                <span class="badge neutral">回测 / 模拟 / 实盘</span>
-              </div>
+          <article class="panel">
+            <div class="panel-head">
+              <h3>报告归档</h3>
+              <span class="badge neutral">支持导出为 Markdown</span>
+            </div>
+            <div class="report-tabs" role="tablist" aria-label="报告归档分类">
+              <button class="report-tab active" type="button" data-report-tab="backtest">回测</button>
+              <button class="report-tab" type="button" data-report-tab="simulation">模拟</button>
+              <button class="report-tab" type="button" data-report-tab="experiment">实验</button>
+            </div>
+            <div class="report-tab-panel active" id="reportTab-backtest">
               <div id="reportArchiveList" class="report-list"></div>
-            </article>
+            </div>
+            <div class="report-tab-panel" id="reportTab-simulation">
+              <div id="reportSimulationList" class="report-list"></div>
+            </div>
+            <div class="report-tab-panel" id="reportTab-experiment">
+              <div id="reportExperimentList" class="report-list"></div>
+            </div>
+            <p id="reportExportHint" class="hint hidden"></p>
+          </article>
 
-            <article class="panel logs-panel">
-              <div class="panel-head">
-                <h3>运行日志</h3>
-                <span class="badge neutral" id="logCount">--</span>
-              </div>
-              <div id="errorBox" class="errors hidden"></div>
-              <pre id="logsText" class="logs"></pre>
-            </article>
-          </div>
+          <article class="panel logs-panel">
+            <div class="panel-head">
+              <h3>运行日志</h3>
+              <span class="badge neutral" id="logCount">--</span>
+            </div>
+            <div id="errorBox" class="errors hidden"></div>
+            <pre id="logsText" class="logs"></pre>
+          </article>
         </section>
       </main>
     </div>
