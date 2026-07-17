@@ -261,6 +261,13 @@ button {
   font-size: 12px;
 }
 
+.badge.tiny {
+  min-height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
 .button:disabled {
   opacity: 0.55;
   cursor: wait;

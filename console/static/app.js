@@ -1658,7 +1658,7 @@ function fillBacktestDatasetSelect(items) {
   const select = $("backtestDatasetSelect");
   if (!select) return;
   select.innerHTML = "";
-  const usable = items.filter((item) => item.status === "可用");
+  const usable = items.filter((item) => item.status === "可用" && item.backtestable !== false);
   if (!usable.length) {
     select.innerHTML = `<option value="">暂无可用数据集</option>`;
     syncBacktestDatasetFields(null);
@@ -1711,7 +1711,7 @@ function fillHyperoptDatasetSelect(items) {
   const select = $("hyperoptDatasetSelect");
   if (!select) return;
   select.innerHTML = "";
-  const usable = items.filter((item) => item.status === "可用");
+  const usable = items.filter((item) => item.status === "可用" && item.backtestable !== false);
   if (!usable.length) {
     select.innerHTML = `<option value="">暂无可用数据集</option>`;
     syncHyperoptDatasetFields(null);
@@ -1781,7 +1781,7 @@ function fillBatchBacktestControls() {
   if (datasetSelect) {
     const previouslySelected = new Set(Array.from(datasetSelect.selectedOptions || []).map((opt) => opt.value));
     datasetSelect.innerHTML = "";
-    const usable = state.dataInventory.filter((item) => item.status === "可用");
+    const usable = state.dataInventory.filter((item) => item.status === "可用" && item.backtestable !== false);
     for (const item of usable) {
       const option = document.createElement("option");
       option.value = item.dataset_id;
@@ -1967,19 +1967,26 @@ function renderDataInventory(items, config) {
   }
   for (const item of items) {
     const completeness = Number(item.completeness);
+    const completenessThreshold = item.market_type === "stock" ? 0.9 : 0.98;
     const statusClass = item.status === "可用" ? "positive" : "negative";
     const datasetId = escapeHTML(item.dataset_id || "");
+    const marketBadge = item.market_type === "stock"
+      ? `<span class="badge warn tiny" title="股票/ETF 数据，非 Binance 交易对，仅支持数据质量分析，不支持回测/模拟/实盘">仅观察</span>`
+      : "";
+    const repairButton = item.backtestable === false
+      ? ""
+      : `<button class="mini-button" type="button" data-data-action="repair" data-dataset-id="${datasetId}">修复</button>`;
     body.insertAdjacentHTML(
       "beforeend",
       `<tr>
-        <td><strong>${escapeHTML(item.name || item.file || "--")}</strong></td>
+        <td><strong>${escapeHTML(item.name || item.file || "--")}</strong> ${marketBadge}</td>
         <td>${escapeHTML(item.exchange || "--")}</td>
         <td>${escapeHTML(item.pair || "--")}</td>
         <td>${escapeHTML(item.timeframe || config.timeframe || "--")}</td>
         <td>${escapeHTML(item.start || "--")}</td>
         <td>${escapeHTML(item.end || "--")}</td>
         <td>${fmtNumber(item.candles, 0)}</td>
-        <td class="${Number.isFinite(completeness) && completeness >= 0.98 ? "positive" : "negative"}">${fmtRatioPercent(item.completeness)}</td>
+        <td class="${Number.isFinite(completeness) && completeness >= completenessThreshold ? "positive" : "negative"}">${fmtRatioPercent(item.completeness)}</td>
         <td>${escapeHTML(item.gap_count ?? "--")} / ${escapeHTML(item.missing_candles ?? "--")}</td>
         <td class="${statusClass}">${escapeHTML(item.status || "--")}</td>
         <td>${fmtBytes(item.size)}</td>
@@ -1987,7 +1994,7 @@ function renderDataInventory(items, config) {
         <td>
           <div class="data-row-actions">
             <button class="mini-button" type="button" data-data-action="detail" data-dataset-id="${datasetId}">详情</button>
-            <button class="mini-button" type="button" data-data-action="repair" data-dataset-id="${datasetId}">修复</button>
+            ${repairButton}
             <button class="mini-button" type="button" data-data-action="rename" data-dataset-id="${datasetId}" data-current-name="${escapeHTML(item.name || "")}">重命名</button>
             <button class="mini-button danger" type="button" data-data-action="delete" data-dataset-id="${datasetId}">删除</button>
           </div>

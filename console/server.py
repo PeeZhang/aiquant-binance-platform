@@ -2041,6 +2041,24 @@ def timeframe_to_seconds(timeframe: str | None) -> int | None:
     return value * factor
 
 
+# 股票/ETF 等仅在工作日交易的品种存放的 exchange 目录名。加密货币 7x24 连续交易，
+# 完整度/缺口检测按自然日历计算；股票市场周末+节假日休市是正常现象，不应计入"缺失"。
+STOCK_MARKET_EXCHANGES = {"stocks"}
+
+
+def is_stock_market_exchange(exchange: str | None) -> bool:
+    return str(exchange or "").lower() in STOCK_MARKET_EXCHANGES
+
+
+def count_weekdays(start, end) -> int:
+    """统计 [start, end] 闭区间内的工作日（周一至周五）天数，不考虑具体节假日。"""
+    import pandas as pd  # type: ignore
+
+    if start > end:
+        return 0
+    return int(len(pd.bdate_range(start.normalize(), end.normalize())))
+
+
 def load_data_names() -> dict[str, str]:
     if not DATA_NAMES_PATH.exists():
         return {}
@@ -2207,7 +2225,7 @@ def parse_timeframe_list(value: Any) -> list[str]:
     return timeframes
 
 
-def inspect_ohlcv_file(path: Path, timeframe: str | None) -> dict[str, Any]:
+def inspect_ohlcv_file(path: Path, timeframe: str | None, is_stock_market: bool = False) -> dict[str, Any]:
     info: dict[str, Any] = {
         "start": None,
         "end": None,
@@ -2236,7 +2254,18 @@ def inspect_ohlcv_file(path: Path, timeframe: str | None) -> dict[str, Any]:
         completeness = None
         gap_count = None
         missing_candles = None
-        if interval_seconds:
+        if is_stock_market and interval_seconds == 86400:
+            # 股票/ETF 日线只在工作日交易，按工作日历而非自然日历计算完整度和缺口，
+            # 避免把周末/长假休市误判为"数据缺失"。
+            expected = count_weekdays(start, end)
+            if expected > 0:
+                completeness = min(1.0, candles / expected)
+            actual_days = set(dates.dt.normalize())
+            expected_days = set(pd.bdate_range(start.normalize(), end.normalize()))
+            missing_days = sorted(d for d in expected_days if d not in actual_days)
+            gap_count = len(missing_days)
+            missing_candles = len(missing_days)
+        elif interval_seconds:
             span_seconds = max(0, int((end - start).total_seconds()))
             expected = floor(span_seconds / interval_seconds) + 1
             if expected > 0:
@@ -2245,6 +2274,12 @@ def inspect_ohlcv_file(path: Path, timeframe: str | None) -> dict[str, Any]:
             gap_deltas = deltas[deltas > interval_seconds * 1.5]
             gap_count = int(len(gap_deltas))
             missing_candles = int(sum(max(0, round(delta / interval_seconds) - 1) for delta in gap_deltas))
+        # 股票/ETF 每年固定有法定节假日休市，属于正常缺口，只按完整度阈值判定；
+        # 加密货币 7x24 连续交易，只要出现缺口（gap_count>0）就视为异常。
+        if is_stock_market and interval_seconds == 86400:
+            is_available = completeness is None or completeness >= 0.90
+        else:
+            is_available = (completeness is None or completeness >= 0.98) and not gap_count
         info.update(
             {
                 "start": start.date().isoformat(),
@@ -2254,7 +2289,7 @@ def inspect_ohlcv_file(path: Path, timeframe: str | None) -> dict[str, Any]:
                 "completeness": completeness,
                 "gap_count": gap_count,
                 "missing_candles": missing_candles,
-                "status": "可用" if (completeness is None or completeness >= 0.98) and not gap_count else "可能缺失",
+                "status": "可用" if is_available else "可能缺失",
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -2276,11 +2311,12 @@ def list_data_inventory() -> list[dict[str, Any]]:
         if "-" in pair:
             pair, timeframe = pair.rsplit("-", 1)
         pair_label = pair.replace("_", "/")
-        meta = inspect_ohlcv_file(path, timeframe)
+        meta = inspect_ohlcv_file(path, timeframe, is_stock_market=is_stock_market_exchange(exchange))
         auto_name = f"{exchange}_{pair_label.replace('/', '-')}_{timeframe or 'unknown'}"
         if meta.get("start") and meta.get("end"):
             auto_name = f"{auto_name}_{meta['start']}_{meta['end']}"
         dataset_id = str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        is_stock = is_stock_market_exchange(exchange)
         items.append(
             {
                 "dataset_id": dataset_id,
@@ -2292,6 +2328,10 @@ def list_data_inventory() -> list[dict[str, Any]]:
                 "file": dataset_id,
                 "size": path.stat().st_size,
                 "modified": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+                "market_type": "stock" if is_stock else "crypto",
+                # 股票/ETF 数据不是 Binance 交易对，Freqtrade 无法对其运行回测/模拟/实盘，
+                # 仅支持数据质量分析等纯观察类功能。
+                "backtestable": not is_stock,
                 **meta,
             }
         )
@@ -2383,6 +2423,8 @@ def download_data(payload: dict[str, Any]) -> dict[str, Any]:
 
 def repair_data_gaps(payload: dict[str, Any]) -> dict[str, Any]:
     dataset = find_dataset(str(payload.get("dataset_id", "")))
+    if not dataset.get("backtestable", True):
+        raise ValueError("该数据集来自股票/ETF 市场（非 Binance 交易对），无法通过 Binance 接口自动修复缺口。")
     pair = str(dataset.get("pair") or "")
     timeframe = str(dataset.get("timeframe") or "")
     if not pair or not timeframe:
@@ -2486,9 +2528,36 @@ def dataset_quality_detail(dataset_id: str) -> dict[str, Any]:
 
     timeframe = dataset.get("timeframe")
     interval_seconds = timeframe_to_seconds(timeframe)
+    is_stock_market = is_stock_market_exchange(dataset.get("exchange"))
     reasons: list[str] = []
     gap_rows: list[dict[str, Any]] = []
-    if interval_seconds:
+    if is_stock_market and interval_seconds == 86400:
+        # 股票/ETF 日线：只在工作日之间缺少工作日才算真正的缺口，周末/长假休市不计入。
+        actual_days = set(df["date"].dt.normalize())
+        expected_days = sorted(pd.bdate_range(df["date"].iloc[0].normalize(), df["date"].iloc[-1].normalize()))
+        prev_actual = None
+        run_missing: list[Any] = []
+        for day in expected_days:
+            if day in actual_days:
+                if run_missing:
+                    gap_rows.append(
+                        {
+                            "from": prev_actual.isoformat() if prev_actual is not None else None,
+                            "to": day.isoformat(),
+                            "missing_candles": len(run_missing),
+                        }
+                    )
+                    run_missing = []
+                prev_actual = day
+            else:
+                run_missing.append(day)
+        if run_missing:
+            gap_rows.append({"from": prev_actual.isoformat() if prev_actual is not None else None, "to": None, "missing_candles": len(run_missing)})
+        detail["gap_total"] = len(gap_rows)
+        detail["gaps"] = gap_rows[:MAX_GAP_ROWS]
+        if len(gap_rows) > MAX_GAP_ROWS:
+            reasons.append(f"共 {len(gap_rows)} 处缺口（按交易日历计算），仅显示前 {MAX_GAP_ROWS} 条")
+    elif interval_seconds:
         deltas = df["date"].diff().dt.total_seconds()
         gap_mask = deltas > interval_seconds * 1.5
         gap_indices = df.index[gap_mask.fillna(False)]
@@ -2533,8 +2602,11 @@ def dataset_quality_detail(dataset_id: str) -> dict[str, Any]:
         ]
 
     completeness = dataset.get("completeness")
-    if completeness is not None and completeness < 0.98:
-        reasons.append(f"完整度 {completeness * 100:.1f}% 低于 98%")
+    # 股票/ETF 每年有约 10-20 个法定节假日休市，属于正常现象，完整度阈值放宽到 90%；
+    # 加密货币 7x24 连续交易，仍按 98% 严格阈值。
+    completeness_threshold = 0.90 if is_stock_market else 0.98
+    if completeness is not None and completeness < completeness_threshold:
+        reasons.append(f"完整度 {completeness * 100:.1f}% 低于 {completeness_threshold * 100:.0f}%")
     if detail["price_anomaly_total"] > 0:
         reasons.append(f"存在 {detail['price_anomaly_total']} 条价格异常")
     if len(df) < 30:
@@ -2551,6 +2623,11 @@ def resolve_backtest_request(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"策略不存在: {strategy}")
     version = strategy_version_by_id(payload.get("strategy_version_id"), strategy)
     dataset = find_dataset(str(payload.get("dataset_id", "")))
+    if not dataset.get("backtestable", True):
+        raise ValueError(
+            f"数据集 {dataset.get('name') or dataset.get('pair')} 来自股票/ETF 市场（非 Binance 交易对），"
+            "Freqtrade 无法对其运行回测，仅支持在数据页查看质量分析。"
+        )
     start = str(payload.get("start", dataset.get("start") or "")).strip()
     end = str(payload.get("end", dataset.get("end") or "")).strip()
     if dataset.get("start") and start < str(dataset["start"]):
@@ -2676,6 +2753,10 @@ def run_batch_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     if not dataset_ids:
         raise ValueError("请至少选择一个数据集")
     datasets = [find_dataset(dataset_id) for dataset_id in dataset_ids]
+    non_backtestable = [d for d in datasets if not d.get("backtestable", True)]
+    if non_backtestable:
+        names = "、".join(d.get("name") or d.get("pair") or "?" for d in non_backtestable)
+        raise ValueError(f"数据集「{names}」来自股票/ETF 市场，Freqtrade 无法对其运行回测，请取消勾选。")
 
     ranges = payload.get("ranges")
     normalized_ranges: list[tuple[str, str]] = []
@@ -2827,6 +2908,11 @@ def run_hyperopt(payload: dict[str, Any]) -> dict[str, Any]:
     if strategy not in known_strategy_names():
         raise ValueError(f"策略不存在: {strategy}")
     dataset = find_dataset(str(payload.get("dataset_id", "")))
+    if not dataset.get("backtestable", True):
+        raise ValueError(
+            f"数据集 {dataset.get('name') or dataset.get('pair')} 来自股票/ETF 市场（非 Binance 交易对），"
+            "Freqtrade 无法对其运行参数优化，仅支持在数据页查看质量分析。"
+        )
     start = str(payload.get("start", dataset.get("start") or "")).strip()
     end = str(payload.get("end", dataset.get("end") or "")).strip()
     if dataset.get("start") and start < str(dataset["start"]):
